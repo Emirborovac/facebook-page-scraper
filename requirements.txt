@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+pymysql
+boto3
+requests
+brotli
+yt-dlp
+python-multipart
+itsdangerous
+starlette

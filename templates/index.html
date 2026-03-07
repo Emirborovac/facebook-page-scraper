@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Facebook Scraper — Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --blue:    #1877F2;
+      --blue-dk: #0d5dcc;
+      --blue-lt: #e8f0fe;
+      --black:   #0a0a0a;
+      --white:   #ffffff;
+      --bg:      #f7f8fa;
+      --border:  #e2e4e9;
+      --text:    #0d0d1a;
+      --muted:   #6b6b80;
+      --nav-h:   60px;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: 'Outfit', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* ── NAV ─────────────────────────────────────────────────────── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: var(--nav-h);
+      background: var(--black);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 32px;
+      z-index: 100;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-decoration: none;
+    }
+
+    .nav-logo {
+      width: 32px;
+      height: 32px;
+      background: var(--blue);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .nav-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--white);
+      letter-spacing: -0.2px;
+    }
+
+    .nav-right {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .nav-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: 0.4; }
+    }
+
+    .logout-btn {
+      height: 32px;
+      padding: 0 16px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 2px;
+      color: rgba(255,255,255,0.6);
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: all 0.15s;
+    }
+
+    .logout-btn:hover {
+      border-color: rgba(255,255,255,0.4);
+      color: var(--white);
+    }
+
+    /* ── LAYOUT ──────────────────────────────────────────────────── */
+    .layout {
+      padding-top: var(--nav-h);
+      min-height: 100vh;
+    }
+
+    /* ── TABS ────────────────────────────────────────────────────── */
+    .tab-bar {
+      background: var(--white);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex;
+      gap: 0;
+      position: sticky;
+      top: var(--nav-h);
+      z-index: 90;
+    }
+
+    .tab-btn {
+      height: 52px;
+      padding: 0 24px;
+      background: none;
+      border: none;
+      border-bottom: 2.5px solid transparent;
+      font-family: 'Outfit', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      letter-spacing: 0.2px;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tab-btn:hover { color: var(--text); }
+
+    .tab-btn.active {
+      color: var(--blue);
+      border-bottom-color: var(--blue);
+      font-weight: 600;
+    }
+
+    .tab-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 9px;
+      font-size: 10px;
+      font-weight: 700;
+      background: var(--blue-lt);
+      color: var(--blue);
+    }
+
+    /* ── CONTENT ─────────────────────────────────────────────────── */
+    .content {
+      padding: 32px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── SECTION HEADER ──────────────────────────────────────────── */
+    .section-head {
+      margin-bottom: 24px;
+    }
+
+    .section-head h2 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.3px;
+    }
+
+    .section-head p {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* ── SUBMIT FORM ─────────────────────────────────────────────── */
+    .form-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 36px 40px;
+      max-width: 720px;
+    }
+
+    .form-row {
+      margin-bottom: 24px;
+    }
+
+    .form-row label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+
+    .form-row .hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      height: 44px;
+      border: 1.5px solid var(--border);
+      border-radius: 2px;
+      padding: 0 14px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 14px;
+      color: var(--text);
+      background: var(--white);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .form-input:focus { border-color: var(--blue); }
+
+    .form-cols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .form-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 8px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+
+    .btn-primary {
+      height: 44px;
+      padding: 0 28px;
+      background: var(--blue);
+      color: var(--white);
+      border: none;
+      border-radius: 2px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: background 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-primary:hover { background: var(--blue-dk); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-secondary {
+      height: 44px;
+      padding: 0 20px;
+      background: transparent;
+      color: var(--muted);
+      border: 1.5px solid var(--border);
+      border-radius: 2px;
+      font-family: 'Outfit', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-secondary:hover { border-color: var(--text); color: var(--text); }
+
+    .submit-toast {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #16a34a;
+      padding: 10px 14px;
+      background: #f0fdf4;
+      border-left: 3px solid #16a34a;
+      border-radius: 1px;
+      margin-bottom: 20px;
+    }
+
+    .submit-toast.error {
+      color: #d93025;
+      background: #fff0ef;
+      border-left-color: #d93025;
+    }
+
+    .submit-toast.show { display: flex; }
+
+    /* ── PROCESSES TABLE ─────────────────────────────────────────── */
+    .processes-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .auto-refresh-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .refresh-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+    }
+
+    .refresh-indicator.refreshing {
+      background: var(--blue);
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .table-wrap {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    thead tr {
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      padding: 12px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      text-align: left;
+    }
+
+    td {
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: #fafafe; }
+
+    .url-cell {
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .url-cell a {
+      color: var(--blue);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .url-cell a:hover { text-decoration: underline; }
+
+    /* ── STATUS BADGES ───────────────────────────────────────────── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .badge-pending    { background: #f3f4f6; color: #6b7280; }
+    .badge-pending .badge-dot { background: #9ca3af; }
+
+    .badge-scraping   { background: #eff6ff; color: #1877F2; }
+    .badge-scraping .badge-dot {
+      background: #1877F2;
+      animation: pulse 1.2s infinite;
+    }
+
+    .badge-downloading_content { background: #fffbeb; color: #d97706; }
+    .badge-downloading_content .badge-dot {
+      background: #f59e0b;
+      animation: pulse 1.2s infinite;
+    }
+
+    .badge-completed  { background: #f0fdf4; color: #16a34a; }
+    .badge-completed .badge-dot { background: #22c55e; }
+
+    .badge-failed     { background: #fff1f2; color: #e11d48; }
+    .badge-failed .badge-dot { background: #f43f5e; }
+
+    /* ── ACTION BUTTONS ──────────────────────────────────────────── */
+    .action-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .btn-action {
+      height: 30px;
+      padding: 0 12px;
+      border: 1.5px solid var(--border);
+      border-radius: 2px;
+      background: var(--white);
+      font-family: 'Outfit', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s;
+    }
+
+    .btn-action:hover {
+      background: var(--text);
+      color: var(--white);
+      border-color: var(--text);
+    }
+
+    .btn-action.blue {
+      border-color: var(--blue);
+      color: var(--blue);
+    }
+
+    .btn-action.blue:hover {
+      background: var(--blue);
+      color: var(--white);
+    }
+
+    /* ── STATS ROW ────────────────────────────────────────────────── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .stat-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      padding: 18px 20px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.5px;
+      line-height: 1;
+    }
+
+    .stat-value.blue { color: var(--blue); }
+    .stat-value.green { color: #16a34a; }
+    .stat-value.amber { color: #d97706; }
+    .stat-value.red { color: #e11d48; }
+
+    /* ── EMPTY STATE ─────────────────────────────────────────────── */
+    .empty-state {
+      text-align: center;
+      padding: 72px 24px;
+      color: var(--muted);
+    }
+
+    .empty-state-icon {
+      font-size: 40px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+
+    .empty-state h3 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .empty-state p {
+      font-size: 13px;
+    }
+
+    /* ── PROGRESS BAR ────────────────────────────────────────────── */
+    .progress-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .progress-bar-bg {
+      flex: 1;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      min-width: 60px;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: var(--blue);
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+
+    .progress-text {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    /* ── SPINNER ─────────────────────────────────────────────────── */
+    .spinner {
+      width: 20px;
+      height: 20px;
+      border: 2.5px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto;
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a class="nav-brand" href="/dashboard">
+    <div class="nav-logo">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+        <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" fill="#fff"/>
+      </svg>
+    </div>
+    <span class="nav-title">Facebook Scraper</span>
+  </a>
+  <div class="nav-right">
+    <div class="nav-status">
+      <div class="status-dot"></div>
+      System Online
+    </div>
+    <form method="POST" action="/logout" style="margin:0">
+      <button type="submit" class="logout-btn">Sign Out</button>
+    </form>
+  </div>
+</nav>
+
+<div class="layout">
+  <!-- TAB BAR -->
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="submit">
+      Submit
+    </button>
+    <button class="tab-btn" data-tab="processes">
+      Processes
+      <span class="tab-badge" id="badge-processes">0</span>
+    </button>
+    <button class="tab-btn" data-tab="operations">
+      Operations
+      <span class="tab-badge" id="badge-operations">0</span>
+    </button>
+  </div>
+
+  <div class="content">
+
+    <!-- ══ SUBMIT TAB ══════════════════════════════════════════════ -->
+    <div class="tab-panel active" id="tab-submit">
+      <div class="section-head">
+        <h2>Submit a Page for Scraping</h2>
+        <p>Provide a Facebook page URL and optional filters to begin scraping.</p>
+      </div>
+      <div class="form-card">
+        <div class="submit-toast" id="submit-toast"></div>
+        <form id="submit-form">
+          <div class="form-row">
+            <label for="facebook_url">Facebook Page URL <span style="color:#e11d48">*</span></label>
+            <input class="form-input" type="url" id="facebook_url" name="facebook_url"
+              placeholder="https://www.facebook.com/pagename" required />
+            <div class="hint">Enter the full URL of the Facebook page or profile to scrape.</div>
+          </div>
+          <div class="form-cols">
+            <div class="form-row" style="margin-bottom:0">
+              <label for="date_from">Date From (optional)</label>
+              <input class="form-input" type="date" id="date_from" name="date_from" />
+              <div class="hint">Earliest post date to include.</div>
+            </div>
+            <div class="form-row" style="margin-bottom:0">
+              <label for="date_to">Date To (optional)</label>
+              <input class="form-input" type="date" id="date_to" name="date_to" />
+              <div class="hint">Latest post date to include.</div>
+            </div>
+          </div>
+          <div class="form-row" style="margin-top:24px">
+            <label for="max_posts">Max Posts (optional)</label>
+            <input class="form-input" type="number" id="max_posts" name="max_posts"
+              placeholder="Leave empty to scrape all posts" min="1" style="max-width:320px" />
+            <div class="hint">Limit the total number of posts scraped. Leave blank for unlimited.</div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn-secondary" onclick="resetForm()">Clear</button>
+            <button type="submit" class="btn-primary" id="submit-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+              </svg>
+              Submit for Scraping
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ══ PROCESSES TAB ═══════════════════════════════════════════ -->
+    <div class="tab-panel" id="tab-processes">
+      <div class="section-head">
+        <h2>Processing Queue</h2>
+        <p>Live view of all active and pending scraping jobs.</p>
+      </div>
+      <div class="stats-row" id="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Pending</div>
+          <div class="stat-value" id="stat-pending">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Scraping</div>
+          <div class="stat-value blue" id="stat-scraping">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Downloading</div>
+          <div class="stat-value amber" id="stat-downloading">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Completed</div>
+          <div class="stat-value green" id="stat-completed">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Failed</div>
+          <div class="stat-value red" id="stat-failed">—</div>
+        </div>
+      </div>
+      <div class="processes-toolbar">
+        <div></div>
+        <div class="auto-refresh-label">
+          <div class="refresh-indicator" id="refresh-dot"></div>
+          Auto-refreshing every 5s
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Page URL</th>
+              <th>Status</th>
+              <th>Posts Scraped</th>
+              <th>Media</th>
+              <th>Submitted</th>
+              <th>Config</th>
+            </tr>
+          </thead>
+          <tbody id="processes-tbody">
+            <tr><td colspan="6"><div class="spinner" style="margin:32px auto"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ══ OPERATIONS TAB ══════════════════════════════════════════ -->
+    <div class="tab-panel" id="tab-operations">
+      <div class="section-head">
+        <h2>Operations</h2>
+        <p>All completed and failed scraping operations.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Page</th>
+              <th>Status</th>
+              <th>Posts</th>
+              <th>Media</th>
+              <th>Finished At</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="operations-tbody">
+            <tr><td colspan="6"><div class="spinner" style="margin:32px auto"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="ops-load-more-wrap" style="text-align:center;padding:20px 0;display:none">
+        <button class="btn-secondary" id="ops-load-more" onclick="loadMoreOps()">Load More</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const OPS_PAGE_SIZE = 20;
+  let allOpsJobs = [];
+  let opsVisible = OPS_PAGE_SIZE;
+
+  // ── Tab switching ──────────────────────────────────────────────────
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ── Helpers ────────────────────────────────────────────────────────
+  function fmtDate(iso) {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleString('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+      });
+    } catch { return iso; }
+  }
+
+  function fmtDateOnly(iso) {
+    if (!iso) return '—';
+    try {
+      return new Date(iso).toLocaleDateString('en-GB', {
+        day: '2-digit', month: 'short', year: 'numeric'
+      });
+    } catch { return iso; }
+  }
+
+  function statusBadge(status) {
+    const labels = {
+      pending: 'Pending', scraping: 'Scraping',
+      downloading_content: 'Downloading', completed: 'Completed', failed: 'Failed',
+    };
+    return `<span class="badge badge-${status}"><span class="badge-dot"></span>${labels[status] || status}</span>`;
+  }
+
+  function progressCell(job) {
+    if (job.status === 'scraping') {
+      return `<div class="progress-wrap">
+        <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%;animation:pulse 1.5s infinite"></div></div>
+        <span class="progress-text">${job.total_posts_scraped || 0} posts</span>
+      </div>`;
+    }
+    return `<span style="font-weight:600">${job.total_posts_scraped || 0}</span>`;
+  }
+
+  function mediaCell(job) {
+    const total = job.total_media_count || 0;
+    const done  = job.total_media_downloaded || 0;
+    if (!total) return '<span style="color:var(--muted);font-size:12px">—</span>';
+    const pct = Math.round((done / total) * 100);
+    return `<div class="progress-wrap">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+      <span class="progress-text">${done}/${total}</span>
+    </div>`;
+  }
+
+  function configCell(job) {
+    const parts = [];
+    if (job.date_from) parts.push(`From: ${fmtDateOnly(job.date_from)}`);
+    if (job.date_to)   parts.push(`To: ${fmtDateOnly(job.date_to)}`);
+    if (job.max_posts) parts.push(`Max: ${job.max_posts}`);
+    return parts.length
+      ? `<span style="font-size:11px;color:var(--muted)">${parts.join('<br>')}</span>`
+      : '<span style="color:var(--muted);font-size:12px">All posts</span>';
+  }
+
+  // ── Fetch and render ───────────────────────────────────────────────
+  async function fetchJobs() {
+    const dot = document.getElementById('refresh-dot');
+    dot && dot.classList.add('refreshing');
+    try {
+      const res = await fetch('/api/jobs?limit=500');
+      const data = await res.json();
+      if (!data.success) return;
+
+      // Processes: only active (pending / scraping / downloading_content)
+      const active = data.jobs.filter(j => ['pending','scraping','downloading_content'].includes(j.status));
+      // Operations: completed + failed (all "done" jobs)
+      const done   = data.jobs.filter(j => ['completed','failed'].includes(j.status));
+
+      renderProcesses(active);
+      allOpsJobs = done;
+      opsVisible = OPS_PAGE_SIZE;
+      renderOperations();
+      updateBadges(active, done, data.stats);
+    } catch(e) {
+      console.error('fetchJobs error:', e);
+    } finally {
+      dot && dot.classList.remove('refreshing');
+    }
+  }
+
+  function updateBadges(active, done, stats) {
+    document.getElementById('badge-processes').textContent = active.length;
+    document.getElementById('badge-operations').textContent = done.length;
+    document.getElementById('stat-pending').textContent = stats.pending || 0;
+    document.getElementById('stat-scraping').textContent = stats.scraping || 0;
+    document.getElementById('stat-downloading').textContent = stats.downloading_content || 0;
+    document.getElementById('stat-completed').textContent = stats.completed || 0;
+    document.getElementById('stat-failed').textContent = stats.failed || 0;
+  }
+
+  // ── Processes tab ──────────────────────────────────────────────────
+  function renderProcesses(jobs) {
+    const tbody = document.getElementById('processes-tbody');
+    if (!jobs.length) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+        <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+          <line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg></div>
+        <h3>No active jobs</h3><p>Submit a Facebook page URL to get started.</p>
+      </div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = jobs.map(job => `
+      <tr>
+        <td class="url-cell">
+          <a href="${job.facebook_url}" target="_blank" rel="noopener">${job.page_name || job.facebook_url}</a>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px">${job.facebook_url}</div>
+        </td>
+        <td>${statusBadge(job.status)}</td>
+        <td>${progressCell(job)}</td>
+        <td>${mediaCell(job)}</td>
+        <td style="font-size:12px;color:var(--muted)">${fmtDate(job.created_at)}</td>
+        <td>${configCell(job)}</td>
+      </tr>`).join('');
+  }
+
+  // ── Operations tab ─────────────────────────────────────────────────
+  function renderOperations() {
+    const tbody = document.getElementById('operations-tbody');
+    const wrap  = document.getElementById('ops-load-more-wrap');
+
+    if (!allOpsJobs.length) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+        <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14,2 14,8 20,8"/>
+        </svg></div>
+        <h3>No operations yet</h3><p>Completed and failed scrapes will appear here.</p>
+      </div></td></tr>`;
+      wrap.style.display = 'none';
+      return;
+    }
+
+    const slice = allOpsJobs.slice(0, opsVisible);
+    tbody.innerHTML = slice.map(job => {
+      const isFailed    = job.status === 'failed';
+      const isCompleted = job.status === 'completed';
+      const finishedAt  = fmtDate(job.completed_at || job.scraping_completed_at || job.created_at);
+      const errorTip    = isFailed && job.error_message
+        ? `<div style="font-size:10px;color:#e11d48;margin-top:3px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${job.error_message.replace(/"/g,'&quot;')}">
+             Error: ${job.error_message.slice(0,60)}${job.error_message.length>60?'...':''}</div>`
+        : '';
+      const actions = isCompleted
+        ? `<div class="action-group">
+            <a href="/gallery/${job.job_id}" class="btn-action blue">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
+                <polyline points="21,15 16,10 5,21"/>
+              </svg>View Content
+            </a>
+            <a href="/api/jobs/${job.job_id}/export" class="btn-action">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>Export CSV
+            </a>
+          </div>`
+        : `<span style="font-size:11px;color:var(--muted)">—</span>`;
+
+      return `<tr>
+        <td class="url-cell">
+          <a href="${job.facebook_url}" target="_blank" rel="noopener">${job.page_name || job.facebook_url}</a>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">${job.job_id.slice(0,8)}...</div>
+          ${errorTip}
+        </td>
+        <td>${statusBadge(job.status)}</td>
+        <td><strong>${job.total_posts_scraped || 0}</strong></td>
+        <td>
+          <span style="font-weight:600">${job.total_media_downloaded || 0}</span>
+          <span style="color:var(--muted);font-size:12px"> / ${job.total_media_count || 0}</span>
+        </td>
+        <td style="font-size:12px;color:var(--muted)">${finishedAt}</td>
+        <td>${actions}</td>
+      </tr>`;
+    }).join('');
+
+    wrap.style.display = opsVisible < allOpsJobs.length ? 'block' : 'none';
+  }
+
+  function loadMoreOps() {
+    opsVisible += OPS_PAGE_SIZE;
+    renderOperations();
+  }
+
+  // ── Submit form ────────────────────────────────────────────────────
+  function showToast(msg, isError = false) {
+    const el = document.getElementById('submit-toast');
+    el.textContent = msg;
+    el.className = 'submit-toast show' + (isError ? ' error' : '');
+    setTimeout(() => el.className = 'submit-toast', 4000);
+  }
+
+  function resetForm() {
+    document.getElementById('submit-form').reset();
+    document.getElementById('submit-toast').className = 'submit-toast';
+  }
+
+  document.getElementById('submit-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    const body = new FormData(e.target);
+    try {
+      const res  = await fetch('/api/submit', { method: 'POST', body });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Page submitted. Job ID: ' + data.job_id.slice(0,8) + '...');
+        e.target.reset();
+        fetchJobs();
+        setTimeout(() => document.querySelector('[data-tab="processes"]').click(), 800);
+      } else {
+        showToast(data.error || 'Submission failed.', true);
+      }
+    } catch {
+      showToast('Network error. Please try again.', true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg> Submit for Scraping`;
+    }
+  });
+
+  fetchJobs();
+  setInterval(fetchJobs, 5000);
+</script>
+</body>
+</html>
