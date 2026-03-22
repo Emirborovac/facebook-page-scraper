@@ -95,6 +95,7 @@
       50%      { opacity: 0.4; }
     }
 
+    .nav-link-btn,
     .logout-btn {
       height: 32px;
       padding: 0 16px;
@@ -108,8 +109,12 @@
       cursor: pointer;
       letter-spacing: 0.3px;
       transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
     }
 
+    .nav-link-btn:hover,
     .logout-btn:hover {
       border-color: rgba(255,255,255,0.4);
       color: var(--white);
@@ -380,6 +385,48 @@
       text-align: left;
     }
 
+    th.sortable-th {
+      padding: 0;
+    }
+
+    .sort-btn {
+      width: 100%;
+      padding: 12px 16px;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      text-align: left;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .sort-btn:hover {
+      color: var(--text);
+    }
+
+    .sort-btn.active {
+      color: var(--text);
+    }
+
+    .sort-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 10px;
+      font-size: 10px;
+      line-height: 1;
+      color: var(--muted);
+    }
+
+    .sort-btn.active .sort-icon {
+      color: var(--blue);
+    }
+
     td {
       padding: 14px 16px;
       font-size: 13px;
@@ -435,6 +482,9 @@
       animation: pulse 1.2s infinite;
     }
 
+    .badge-paused    { background: #fff7ed; color: #d97706; }
+    .badge-paused .badge-dot { background: #f59e0b; }
+
     .badge-downloading_content { background: #fffbeb; color: #d97706; }
     .badge-downloading_content .badge-dot {
       background: #f59e0b;
@@ -444,12 +494,16 @@
     .badge-completed  { background: #f0fdf4; color: #16a34a; }
     .badge-completed .badge-dot { background: #22c55e; }
 
+    .badge-stopped    { background: #f5f3ff; color: #7c3aed; }
+    .badge-stopped .badge-dot { background: #8b5cf6; }
+
     .badge-failed     { background: #fff1f2; color: #e11d48; }
     .badge-failed .badge-dot { background: #f43f5e; }
 
     /* ── ACTION BUTTONS ──────────────────────────────────────────── */
     .action-group {
       display: flex;
+      flex-wrap: wrap;
       gap: 6px;
     }
 
@@ -488,10 +542,38 @@
       color: var(--white);
     }
 
+    .btn-action.amber {
+      border-color: #d97706;
+      color: #d97706;
+    }
+
+    .btn-action.amber:hover {
+      background: #d97706;
+      color: var(--white);
+      border-color: #d97706;
+    }
+
+    .btn-action.danger {
+      border-color: #e11d48;
+      color: #e11d48;
+    }
+
+    .btn-action.danger:hover {
+      background: #e11d48;
+      color: var(--white);
+      border-color: #e11d48;
+    }
+
+    .btn-action:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
     /* ── STATS ROW ────────────────────────────────────────────────── */
     .stats-row {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 12px;
       margin-bottom: 24px;
     }
@@ -607,6 +689,7 @@
       <div class="status-dot"></div>
       System Online
     </div>
+    <a class="nav-link-btn" href="/content">All Content</a>
     <form method="POST" action="/logout" style="margin:0">
       <button type="submit" class="logout-btn">Sign Out</button>
     </form>
@@ -635,16 +718,26 @@
     <div class="tab-panel active" id="tab-submit">
       <div class="section-head">
         <h2>Submit a Page for Scraping</h2>
-        <p>Provide a Facebook page URL and optional filters to begin scraping.</p>
+        <p>Provide a Facebook or TikTok account URL and optional filters to begin scraping.</p>
       </div>
       <div class="form-card">
         <div class="submit-toast" id="submit-toast"></div>
         <form id="submit-form">
           <div class="form-row">
-            <label for="facebook_url">Facebook Page URL <span style="color:#e11d48">*</span></label>
+            <label for="facebook_url">Source URL <span style="color:#e11d48">*</span></label>
             <input class="form-input" type="url" id="facebook_url" name="facebook_url"
-              placeholder="https://www.facebook.com/pagename" required />
-            <div class="hint">Enter the full URL of the Facebook page or profile to scrape.</div>
+              placeholder="https://www.facebook.com/pagename or https://www.tiktok.com/@account or https://www.instagram.com/account/" required />
+            <div class="hint">Enter the full URL of the Facebook page/profile or TikTok account to scrape.</div>
+          </div>
+          <div class="form-row" style="margin-bottom:24px">
+            <label for="source_category">Category (optional)</label>
+            <input class="form-input" type="text" id="source_category" name="source_category"
+              placeholder="e.g. Tunisia or Palestine" list="source-category-options" style="max-width:320px" />
+            <datalist id="source-category-options">
+              <option value="Tunisia"></option>
+              <option value="Palestine"></option>
+            </datalist>
+            <div class="hint">Optional grouping label for All Content. Leave blank for no category.</div>
           </div>
           <div class="form-cols">
             <div class="form-row" style="margin-bottom:0">
@@ -681,12 +774,16 @@
     <div class="tab-panel" id="tab-processes">
       <div class="section-head">
         <h2>Processing Queue</h2>
-        <p>Live view of all active and pending scraping jobs.</p>
+        <p>Live view of queued, paused, active, and downloading scraping jobs.</p>
       </div>
       <div class="stats-row" id="stats-row">
         <div class="stat-card">
           <div class="stat-label">Pending</div>
           <div class="stat-value" id="stat-pending">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Paused</div>
+          <div class="stat-value amber" id="stat-paused">—</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Scraping</div>
@@ -716,16 +813,17 @@
         <table>
           <thead>
             <tr>
-              <th>Page URL</th>
-              <th>Status</th>
-              <th>Posts Scraped</th>
-              <th>Media</th>
-              <th>Submitted</th>
-              <th>Config</th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="page"><span>Page URL</span><span class="sort-icon">↕</span></button></th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="status"><span>Status</span><span class="sort-icon">↕</span></button></th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="posts"><span>Posts Scraped</span><span class="sort-icon">↕</span></button></th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="media"><span>Media</span><span class="sort-icon">↕</span></button></th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="reached"><span>Reached Date</span><span class="sort-icon">↕</span></button></th>
+              <th class="sortable-th"><button type="button" class="sort-btn" data-process-sort="config"><span>Config</span><span class="sort-icon">↕</span></button></th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="processes-tbody">
-            <tr><td colspan="6"><div class="spinner" style="margin:32px auto"></div></td></tr>
+            <tr><td colspan="7"><div class="spinner" style="margin:32px auto"></div></td></tr>
           </tbody>
         </table>
       </div>
@@ -735,7 +833,7 @@
     <div class="tab-panel" id="tab-operations">
       <div class="section-head">
         <h2>Operations</h2>
-        <p>All completed and failed scraping operations.</p>
+        <p>All completed, stopped, and failed scraping operations.</p>
       </div>
       <div class="table-wrap">
         <table>
@@ -764,17 +862,55 @@
 
 <script>
   const OPS_PAGE_SIZE = 20;
+  const STALLED_JOB_MS = 90 * 1000;
+  const OPS_VISIBLE_STORAGE_KEY = 'fb-scraper-ops-visible';
+  const PROCESS_SORT_STORAGE_KEY = 'fb-scraper-process-sort';
+  const PROCESS_STATUS_SORT_ORDER = {
+    pending: 1,
+    paused: 2,
+    scraping: 3,
+    downloading_content: 4,
+    stopped: 5,
+    completed: 6,
+    failed: 7,
+  };
+  let allProcessJobs = [];
   let allOpsJobs = [];
-  let opsVisible = OPS_PAGE_SIZE;
+  let opsVisible = (() => {
+    try {
+      const saved = Number(window.localStorage.getItem(OPS_VISIBLE_STORAGE_KEY));
+      if (Number.isFinite(saved) && saved >= OPS_PAGE_SIZE) {
+        return saved;
+      }
+    } catch {}
+    return OPS_PAGE_SIZE;
+  })();
+  const pendingActionJobIds = new Set();
+  let processSort = (() => {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(PROCESS_SORT_STORAGE_KEY) || 'null');
+      if (saved && typeof saved.key === 'string' && typeof saved.dir === 'string') {
+        return saved;
+      }
+    } catch {}
+    return { key: null, dir: 'asc' };
+  })();
 
   // ── Tab switching ──────────────────────────────────────────────────
-  document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  function activateTab(tabName) {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
+    document.querySelectorAll('.tab-panel').forEach(panel => {
+      panel.classList.toggle('active', panel.id === 'tab-' + tabName);
+    });
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => activateTab(btn.dataset.tab));
+  });
+  document.querySelectorAll('[data-process-sort]').forEach(btn => {
+    btn.addEventListener('click', () => setProcessSort(btn.dataset.processSort));
   });
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -799,21 +935,239 @@
 
   function statusBadge(status) {
     const labels = {
-      pending: 'Pending', scraping: 'Scraping',
-      downloading_content: 'Downloading', completed: 'Completed', failed: 'Failed',
+      pending: 'Pending',
+      paused: 'Paused',
+      scraping: 'Scraping',
+      downloading_content: 'Downloading',
+      stopped: 'Stopped',
+      completed: 'Completed',
+      failed: 'Failed',
     };
     return `<span class="badge badge-${status}"><span class="badge-dot"></span>${labels[status] || status}</span>`;
   }
 
+  function persistOpsVisible() {
+    try {
+      window.localStorage.setItem(OPS_VISIBLE_STORAGE_KEY, String(opsVisible));
+    } catch {}
+  }
+
+  function persistProcessSort() {
+    try {
+      window.localStorage.setItem(PROCESS_SORT_STORAGE_KEY, JSON.stringify(processSort));
+    } catch {}
+  }
+
+  function defaultProcessSortDirection(key) {
+    if (key === 'posts' || key === 'media') return 'desc';
+    if (key === 'reached') return 'asc';
+    return 'asc';
+  }
+
+  function setProcessSort(key) {
+    if (!key) return;
+    if (processSort.key === key) {
+      processSort.dir = processSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      processSort = { key, dir: defaultProcessSortDirection(key) };
+    }
+    persistProcessSort();
+    updateProcessSortButtons();
+    renderProcesses(allProcessJobs);
+  }
+
+  function updateProcessSortButtons() {
+    document.querySelectorAll('[data-process-sort]').forEach(btn => {
+      const key = btn.dataset.processSort;
+      const active = processSort.key === key;
+      btn.classList.toggle('active', active);
+      const icon = btn.querySelector('.sort-icon');
+      if (!icon) return;
+      if (!active) {
+        icon.textContent = '↕';
+      } else {
+        icon.textContent = processSort.dir === 'asc' ? '↑' : '↓';
+      }
+    });
+  }
+
+  function compareNullableNumbers(a, b) {
+    const left = Number.isFinite(a) ? a : null;
+    const right = Number.isFinite(b) ? b : null;
+    if (left === null && right === null) return 0;
+    if (left === null) return 1;
+    if (right === null) return -1;
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+  }
+
+  function compareText(a, b) {
+    const left = (a || '').toString().toLowerCase();
+    const right = (b || '').toString().toLowerCase();
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+  }
+
+  function processConfigKey(job) {
+    return [job.date_from || '', job.date_to || '', String(job.max_posts || '')].join('|');
+  }
+
+  function compareProcessJobs(a, b, key) {
+    if (key === 'page') {
+      return compareText(a.page_name || a.facebook_url, b.page_name || b.facebook_url);
+    }
+    if (key === 'status') {
+      return compareNullableNumbers(PROCESS_STATUS_SORT_ORDER[a.status], PROCESS_STATUS_SORT_ORDER[b.status]);
+    }
+    if (key === 'posts') {
+      return compareNullableNumbers(Number(a.total_posts_scraped || 0), Number(b.total_posts_scraped || 0));
+    }
+    if (key === 'media') {
+      return compareNullableNumbers(Number(a.total_media_count || 0), Number(b.total_media_count || 0));
+    }
+    if (key === 'reached') {
+      return compareNullableNumbers(Number(a.oldest_published_timestamp), Number(b.oldest_published_timestamp));
+    }
+    if (key === 'config') {
+      return compareText(processConfigKey(a), processConfigKey(b));
+    }
+    return 0;
+  }
+
+  function sortedProcessJobs(jobs) {
+    updateProcessSortButtons();
+    if (!processSort.key) return jobs.slice();
+    const direction = processSort.dir === 'desc' ? -1 : 1;
+    return jobs
+      .map((job, index) => ({ job, index }))
+      .sort((left, right) => {
+        const cmp = compareProcessJobs(left.job, right.job, processSort.key);
+        if (cmp !== 0) return cmp * direction;
+        return left.index - right.index;
+      })
+      .map(item => item.job);
+  }
+
+  function setJobActionPending(jobId, isPending) {
+    if (isPending) {
+      pendingActionJobIds.add(jobId);
+    } else {
+      pendingActionJobIds.delete(jobId);
+    }
+    renderProcesses(allProcessJobs);
+    renderOperations();
+  }
+
+  async function parseActionResponse(res, fallbackMessage) {
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {}
+    if (!res.ok || !data.success) {
+      throw new Error(data.detail || data.error || fallbackMessage);
+    }
+    return data;
+  }
+
+  function parseIsoDate(iso) {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function isJobStalled(job) {
+    if (job.status !== 'scraping') return false;
+    const lastActivity = parseIsoDate(job.scrape_last_progress_at || job.started_scraping_at || job.created_at);
+    if (!lastActivity) return false;
+    return Date.now() - lastActivity.getTime() > STALLED_JOB_MS;
+  }
+
+  function findJob(jobId) {
+    return allProcessJobs.find(job => job.job_id === jobId)
+      || allOpsJobs.find(job => job.job_id === jobId)
+      || null;
+  }
+
+  function continueTitle(job) {
+    if (!job) return 'Continue from the saved checkpoint.';
+    if (job.resume_stage === 'downloading_content') return 'Continue from the saved media download checkpoint.';
+    if (job.continue_mode === 'exact') return 'Continue from the exact saved checkpoint.';
+    if (job.continue_mode === 'fresh') return 'Return this queued job to processing.';
+    return 'Continue from the saved scraping frontier.';
+  }
+
+  function continueConfirmMessage(job) {
+    if (!job) return 'Continue this job from its saved checkpoint?';
+    if (job.resume_stage === 'downloading_content') return 'Continue this job from its saved media download checkpoint?';
+    if (job.continue_mode === 'exact') return 'Continue this job from its exact saved checkpoint?';
+    if (job.continue_mode === 'fresh') return 'Send this paused job back to the processing queue?';
+    return 'Continue this job from its saved checkpoint?';
+  }
+
+  function requestedActionLabel(job) {
+    const labels = { pause: 'Pause requested', stop: 'Stop requested', delete: 'Delete requested' };
+    return labels[job.control_action] || 'Updating...';
+  }
+
+  function processActionsCell(job) {
+    const isBusy = pendingActionJobIds.has(job.job_id);
+    const actionDisabled = isBusy ? 'disabled' : '';
+
+    if (job.control_action) {
+      return `<span style="font-size:11px;color:var(--muted)">${requestedActionLabel(job)}</span>`;
+    }
+
+    const continueBtn = `<button type="button" class="btn-action blue" onclick="continueJob('${job.job_id}')" ${actionDisabled} title="${continueTitle(job)}">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polygon points="5,3 19,12 5,21" fill="none"/>
+      </svg>Continue
+    </button>`;
+    const pauseBtn = `<button type="button" class="btn-action amber" onclick="pauseJob('${job.job_id}')" ${actionDisabled}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="8" y1="4" x2="8" y2="20"/><line x1="16" y1="4" x2="16" y2="20"/>
+      </svg>Pause
+    </button>`;
+    const stopBtn = `<button type="button" class="btn-action" onclick="stopJob('${job.job_id}')" ${actionDisabled}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <rect x="6" y="6" width="12" height="12"/>
+      </svg>Stop
+    </button>`;
+    const deleteBtn = `<button type="button" class="btn-action danger" onclick="deleteJob('${job.job_id}')" ${actionDisabled}>
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="3,6 5,6 21,6"/><path d="M19,6V20a2,2 0 0 1-2,2H7a2,2 0 0 1-2-2V6"/>
+        <path d="M8,6V4a2,2 0 0 1 2-2h4a2,2 0 0 1 2,2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+      </svg>Delete
+    </button>`;
+
+    if (job.status === 'pending') {
+      return `<div class="action-group">${pauseBtn}${stopBtn}${deleteBtn}</div>`;
+    }
+    if (job.status === 'paused') {
+      return `<div class="action-group">${continueBtn}${stopBtn}${deleteBtn}</div>`;
+    }
+    if (job.status === 'scraping') {
+      const primary = job.can_continue && isJobStalled(job) ? continueBtn : pauseBtn;
+      return `<div class="action-group">${primary}${stopBtn}${deleteBtn}</div>`;
+    }
+    if (job.status === 'downloading_content') {
+      return `<div class="action-group">${pauseBtn}${stopBtn}${deleteBtn}</div>`;
+    }
+    return '<span style="font-size:11px;color:var(--muted)">—</span>';
+  }
+
   function progressCell(job) {
     if (job.status === 'scraping') {
+      const suffix = isJobStalled(job) ? ' • stalled' : '';
       return `<div class="progress-wrap">
         <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%;animation:pulse 1.5s infinite"></div></div>
-        <span class="progress-text">${job.total_posts_scraped || 0} posts</span>
+        <span class="progress-text">${job.total_posts_scraped || 0} posts${suffix}</span>
       </div>`;
     }
     return `<span style="font-weight:600">${job.total_posts_scraped || 0}</span>`;
   }
+
 
   function mediaCell(job) {
     const total = job.total_media_count || 0;
@@ -845,14 +1199,16 @@
       const data = await res.json();
       if (!data.success) return;
 
-      // Processes: only active (pending / scraping / downloading_content)
-      const active = data.jobs.filter(j => ['pending','scraping','downloading_content'].includes(j.status));
-      // Operations: completed + failed (all "done" jobs)
-      const done   = data.jobs.filter(j => ['completed','failed'].includes(j.status));
+      // Processes: queued + active + paused jobs
+      const active = data.jobs.filter(j => ['pending','paused','scraping','downloading_content'].includes(j.status));
+      // Operations: completed + stopped + failed jobs
+      const done   = data.jobs.filter(j => ['completed','stopped','failed'].includes(j.status));
 
+      allProcessJobs = active;
       renderProcesses(active);
       allOpsJobs = done;
-      opsVisible = OPS_PAGE_SIZE;
+      opsVisible = Math.max(opsVisible, OPS_PAGE_SIZE);
+      persistOpsVisible();
       renderOperations();
       updateBadges(active, done, data.stats);
     } catch(e) {
@@ -866,6 +1222,7 @@
     document.getElementById('badge-processes').textContent = active.length;
     document.getElementById('badge-operations').textContent = done.length;
     document.getElementById('stat-pending').textContent = stats.pending || 0;
+    document.getElementById('stat-paused').textContent = stats.paused || 0;
     document.getElementById('stat-scraping').textContent = stats.scraping || 0;
     document.getElementById('stat-downloading').textContent = stats.downloading_content || 0;
     document.getElementById('stat-completed').textContent = stats.completed || 0;
@@ -875,17 +1232,18 @@
   // ── Processes tab ──────────────────────────────────────────────────
   function renderProcesses(jobs) {
     const tbody = document.getElementById('processes-tbody');
-    if (!jobs.length) {
-      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+    const sortedJobs = sortedProcessJobs(jobs);
+    if (!sortedJobs.length) {
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
         <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg></div>
-        <h3>No active jobs</h3><p>Submit a Facebook page URL to get started.</p>
+        <h3>No active jobs</h3><p>Submit a Facebook or TikTok URL to get started.</p>
       </div></td></tr>`;
       return;
     }
-    tbody.innerHTML = jobs.map(job => `
+    tbody.innerHTML = sortedJobs.map(job => `
       <tr>
         <td class="url-cell">
           <a href="${job.facebook_url}" target="_blank" rel="noopener">${job.page_name || job.facebook_url}</a>
@@ -894,10 +1252,14 @@
         <td>${statusBadge(job.status)}</td>
         <td>${progressCell(job)}</td>
         <td>${mediaCell(job)}</td>
-        <td style="font-size:12px;color:var(--muted)">${fmtDate(job.created_at)}</td>
+        <td style="font-size:12px;color:var(--muted)">${fmtDateOnly(job.reached_date)}</td>
         <td>${configCell(job)}</td>
+        <td>${processActionsCell(job)}</td>
       </tr>`).join('');
   }
+
+
+  updateProcessSortButtons();
 
   // ── Operations tab ─────────────────────────────────────────────────
   function renderOperations() {
@@ -910,7 +1272,7 @@
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14,2 14,8 20,8"/>
         </svg></div>
-        <h3>No operations yet</h3><p>Completed and failed scrapes will appear here.</p>
+        <h3>No operations yet</h3><p>Completed, stopped, and failed scrapes will appear here.</p>
       </div></td></tr>`;
       wrap.style.display = 'none';
       return;
@@ -919,14 +1281,16 @@
     const slice = allOpsJobs.slice(0, opsVisible);
     tbody.innerHTML = slice.map(job => {
       const isFailed    = job.status === 'failed';
-      const isCompleted = job.status === 'completed';
+      const hasSavedContent = (job.total_posts_scraped || 0) > 0;
       const finishedAt  = fmtDate(job.completed_at || job.scraping_completed_at || job.created_at);
       const errorTip    = isFailed && job.error_message
         ? `<div style="font-size:10px;color:#e11d48;margin-top:3px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${job.error_message.replace(/"/g,'&quot;')}">
              Error: ${job.error_message.slice(0,60)}${job.error_message.length>60?'...':''}</div>`
         : '';
-      const actions = isCompleted
-        ? `<div class="action-group">
+      const isBusy = pendingActionJobIds.has(job.job_id);
+      const actionDisabled = isBusy ? 'disabled' : '';
+      const contentActions = hasSavedContent
+        ? `
             <a href="/gallery/${job.job_id}" class="btn-action blue">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/>
@@ -939,8 +1303,48 @@
                 <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
               </svg>Export CSV
             </a>
-          </div>`
-        : `<span style="font-size:11px;color:var(--muted)">—</span>`;
+          `
+        : '';
+      const continueAction = job.can_continue
+        ? `
+            <button type="button" class="btn-action blue" onclick="continueJob('${job.job_id}')" ${actionDisabled} title="${continueTitle(job)}">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="23,4 23,10 17,10"/><polyline points="1,20 1,14 7,14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>Continue
+            </button>
+          `
+        : '';
+      const canRetryDownloads = ['failed', 'completed', 'stopped'].includes(job.status)
+        && (job.total_media_count || 0) > 0
+        && (job.total_media_downloaded || 0) < (job.total_media_count || 0);
+      const retryDownloadsAction = canRetryDownloads
+        ? `
+            <button type="button" class="btn-action blue" onclick="retryDownloads('${job.job_id}')" ${actionDisabled}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>Retry Downloads
+            </button>
+          `
+        : '';
+      const actions = `<div class="action-group">
+            ${contentActions}
+            ${continueAction}
+            ${retryDownloadsAction}
+            <button type="button" class="btn-action amber" onclick="rerunJob('${job.job_id}')" ${actionDisabled}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="23,4 23,10 17,10"/><polyline points="1,20 1,14 7,14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>Run Again
+            </button>
+            <button type="button" class="btn-action danger" onclick="deleteJob('${job.job_id}')" ${actionDisabled}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="3,6 5,6 21,6"/><path d="M19,6V20a2,2 0 0 1-2,2H7a2,2 0 0 1-2-2V6"/>
+                <path d="M8,6V4a2,2 0 0 1 2-2h4a2,2 0 0 1 2,2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+              </svg>Delete
+            </button>
+          </div>`;
 
       return `<tr>
         <td class="url-cell">
@@ -962,10 +1366,114 @@
     wrap.style.display = opsVisible < allOpsJobs.length ? 'block' : 'none';
   }
 
+
   function loadMoreOps() {
     opsVisible += OPS_PAGE_SIZE;
+    persistOpsVisible();
     renderOperations();
   }
+
+  async function pauseJob(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Pause this job and keep its checkpoint so it can continue later?')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/pause`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not pause this job.');
+      await fetchJobs();
+    } catch (error) {
+      window.alert(error.message || 'Could not pause this job.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function stopJob(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Stop this job, keep its checkpoint, and move it to Operations?')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/stop`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not stop this job.');
+      await fetchJobs();
+      activateTab('operations');
+    } catch (error) {
+      window.alert(error.message || 'Could not stop this job.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function continueJob(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    const job = findJob(jobId);
+    if (!window.confirm(continueConfirmMessage(job))) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/continue`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not continue this scrape.');
+      await fetchJobs();
+      activateTab('processes');
+    } catch (error) {
+      window.alert(error.message || 'Could not continue this scrape.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function rerunJob(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Send this operation back to the processing queue and run it again?')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/rerun`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not restart this operation.');
+      await fetchJobs();
+      activateTab('processes');
+    } catch (error) {
+      window.alert(error.message || 'Could not restart this operation.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function retryDownloads(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Retry only the failed media downloads for this job without re-running scraping?')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/retry-downloads`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not retry failed downloads for this job.');
+      await fetchJobs();
+      activateTab('processes');
+    } catch (error) {
+      window.alert(error.message || 'Could not retry failed downloads for this job.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function deleteJob(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Delete this job and all of its saved posts? Running work will stop at the next safe checkpoint.')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}`, { method: 'DELETE' });
+      await parseActionResponse(res, 'Could not delete this operation.');
+      await fetchJobs();
+    } catch (error) {
+      window.alert(error.message || 'Could not delete this operation.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
 
   // ── Submit form ────────────────────────────────────────────────────
   function showToast(msg, isError = false) {
@@ -993,7 +1501,7 @@
         showToast('Page submitted. Job ID: ' + data.job_id.slice(0,8) + '...');
         e.target.reset();
         fetchJobs();
-        setTimeout(() => document.querySelector('[data-tab="processes"]').click(), 800);
+        setTimeout(() => activateTab('processes'), 800);
       } else {
         showToast(data.error || 'Submission failed.', true);
       }

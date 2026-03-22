@@ -19,6 +19,27 @@ cookies.json
 cookies.txt
 session/
 sessions/
+cookie_pool/
+cookie_pool_backup*/
+cookie_refresh*/
+cookie_vault*/
+instagram_cookie_pool/
+instagram_cookies*.txt
+tiktok_cookies/
+
+# Downloads / media
+downloads/
+*.mp4
+*.mp4.part
+*.jpg
+*.jpeg
+*.png
+
+# Database files
+*.db
+
+# Backup files
+*.bak.*
 
 # Logs
 *.log
@@ -42,3 +63,6 @@ dist/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Service files
+*.service

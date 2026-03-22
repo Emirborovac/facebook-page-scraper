@@ -58,6 +58,29 @@ def generate_presigned_url(s3_key: str, expiry: int = 604800) -> str:
         return ""
 
 
+def delete_s3_objects(keys: list[str]):
+    clean_keys = [key for key in dict.fromkeys(keys) if key]
+    if not clean_keys or not S3_BUCKET_NAME:
+        return
+
+    client = _get_s3_client()
+    try:
+        for idx in range(0, len(clean_keys), 1000):
+            batch = clean_keys[idx: idx + 1000]
+            response = client.delete_objects(
+                Bucket=S3_BUCKET_NAME,
+                Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
+            )
+            errors = response.get("Errors") or []
+            if errors:
+                logging.warning(f"[S3] delete_objects reported {len(errors)} error(s)")
+        logging.info(f"[S3] Deleted {len(clean_keys)} object(s)")
+    except ClientError as exc:
+        logging.warning(f"[S3] Could not delete object batch: {exc}")
+    except Exception as exc:
+        logging.warning(f"[S3] Unexpected delete error: {exc}")
+
+
 def delete_local_file(path: str):
     try:
         if os.path.exists(path):

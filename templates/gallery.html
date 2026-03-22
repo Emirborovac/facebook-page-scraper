@@ -739,7 +739,7 @@
       ? `<div class="card-desc na">No description available.</div>`
       : `<div class="card-desc">${desc.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`;
 
-    const postLink = post.post_link || '#';
+    const postLink = post.external_redirect_url || post.post_link || '#';
 
     // S3 link button — shown only when download completed and an S3 URL exists
     const s3Url = (() => {
@@ -767,7 +767,7 @@
       </div>
       <div class="card-footer">
         <a href="${postLink}" target="_blank" rel="noopener" class="card-link">
-          View on Facebook
+          ${post.external_link_label || 'View Original'}
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
             <polyline points="15,3 21,3 21,9"/><line x1="10" y1="14" x2="21" y2="3"/>

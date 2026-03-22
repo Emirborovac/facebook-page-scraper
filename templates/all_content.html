@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>All Content — Facebook Scraper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --blue: #1877F2;
+      --blue-dk: #0d5dcc;
+      --blue-lt: #e8f0fe;
+      --black: #0a0a0a;
+      --white: #ffffff;
+      --bg: #f7f8fa;
+      --border: #e2e4e9;
+      --text: #0d0d1a;
+      --muted: #6b6b80;
+      --nav-h: 60px;
+      --card-r: 2px;
+    }
+    html, body { min-height: 100%; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); }
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--nav-h);
+      background: var(--black); display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; z-index: 100; border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .nav-left { display: flex; align-items: center; gap: 16px; }
+    .back-btn { display: flex; align-items: center; gap: 6px; color: rgba(255,255,255,0.6); text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
+    .back-btn:hover { color: var(--white); }
+    .nav-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.12); }
+    .nav-page-info { display: flex; align-items: center; gap: 10px; }
+    .nav-logo { width: 28px; height: 28px; background: var(--blue); border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .nav-page-name { font-size: 14px; font-weight: 600; color: var(--white); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-right { display: flex; align-items: center; gap: 10px; }
+    .btn-export {
+      height: 34px; padding: 0 16px; background: transparent; border: 1px solid rgba(255,255,255,0.2); border-radius: 2px;
+      color: rgba(255,255,255,0.7); font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 500;
+      cursor: pointer; text-decoration: none; display: flex; align-items: center; gap: 7px; transition: all 0.15s;
+    }
+    .btn-export:hover { border-color: rgba(255,255,255,0.5); color: var(--white); }
+    .layout { padding-top: var(--nav-h); }
+    .page-header { background: var(--white); border-bottom: 1px solid var(--border); padding: 20px 32px; }
+    .page-header-inner { max-width: 1440px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+    .page-meta h2 { font-size: 18px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+    .page-meta p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .page-counts { display: flex; gap: 20px; flex-wrap: wrap; justify-content: flex-end; }
+    .count-item { text-align: right; min-width: 92px; }
+    .count-value { font-size: 22px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; line-height: 1; }
+    .count-label { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; margin-top: 3px; }
+    .category-bar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 4px; position: sticky; top: var(--nav-h); z-index: 91; overflow-x: auto; }
+    .category-btn { height: 46px; padding: 0 18px; background: none; border: none; border-bottom: 2.5px solid transparent; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: all 0.15s; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .category-btn:hover { color: var(--text); }
+    .category-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+    .category-bar::-webkit-scrollbar { display: none; }
+    .filter-bar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 4px; position: sticky; top: calc(var(--nav-h) + 46px); z-index: 90; overflow-x: auto; }
+    .filter-btn { height: 48px; padding: 0 18px; background: none; border: none; border-bottom: 2.5px solid transparent; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: all 0.15s; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .filter-btn:hover { color: var(--text); }
+    .filter-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+    .filter-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: 10px; font-weight: 700; background: var(--bg); color: var(--muted); }
+    .filter-btn.active .filter-count { background: var(--blue-lt); color: var(--blue); }
+    .grid-wrap { max-width: 1440px; margin: 0 auto; padding: 28px 32px 48px; }
+    .posts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .post-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--card-r); overflow: hidden; display: flex; flex-direction: column; transition: box-shadow 0.15s, transform 0.15s; }
+    .post-card:hover { box-shadow: 0 8px 32px rgba(0,0,0,0.08); transform: translateY(-1px); }
+    .card-media { aspect-ratio: 16/9; background: #0d0d1a; position: relative; overflow: hidden; flex-shrink: 0; }
+    .card-media img, .card-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .media-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #0d0d1a; }
+    .media-placeholder svg { opacity: 0.25; }
+    .media-type-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.7); color: var(--white); font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; padding: 3px 8px; border-radius: 2px; }
+    .media-type-badge.video { background: rgba(24,119,242,0.85); }
+    .media-type-badge.image { background: rgba(0,0,0,0.6); }
+    .media-type-badge.text { background: rgba(10,10,10,0.7); }
+    .card-body { padding: 14px 16px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
+    .card-source-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; }
+    .card-source-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; flex-shrink: 0; }
+    .card-source-link { color: var(--blue); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .card-source-link:hover { text-decoration: underline; }
+    .card-date { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+    .card-desc { font-size: 13px; color: var(--text); line-height: 1.55; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-desc.na { color: var(--muted); font-style: italic; }
+    .card-footer { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+    .footer-links, .footer-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .card-link { font-size: 11px; font-weight: 600; color: var(--blue); text-decoration: none; display: flex; align-items: center; gap: 4px; letter-spacing: 0.2px; transition: opacity 0.15s; }
+    .card-link:hover { opacity: 0.7; }
+    .s3-btn { font-size: 11px; font-weight: 600; color: #059669; text-decoration: none; display: flex; align-items: center; gap: 3px; padding: 2px 7px; border: 1px solid #d1fae5; background: #f0fdf4; border-radius: 3px; transition: opacity 0.15s; letter-spacing: 0.2px; }
+    .s3-btn:hover { opacity: 0.7; }
+    .dl-badge { font-size: 10px; font-weight: 600; padding: 2px 7px; border-radius: 2px; letter-spacing: 0.3px; }
+    .dl-completed { background: #f0fdf4; color: #16a34a; }
+    .dl-pending { background: #f3f4f6; color: #9ca3af; }
+    .dl-failed { background: #fff1f2; color: #e11d48; }
+    .dl-downloading { background: var(--blue-lt); color: var(--blue); }
+    .pagination { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 32px; padding-bottom: 16px; flex-wrap: wrap; }
+    .page-btn { height: 36px; min-width: 36px; padding: 0 12px; border: 1.5px solid var(--border); border-radius: 2px; background: var(--white); font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer; transition: all 0.15s; }
+    .page-btn:hover { border-color: var(--blue); color: var(--blue); }
+    .page-btn.active { background: var(--blue); border-color: var(--blue); color: var(--white); font-weight: 600; }
+    .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .page-info { font-size: 12px; color: var(--muted); padding: 0 8px; }
+    .empty-state { grid-column: 1/-1; text-align: center; padding: 80px 24px; color: var(--muted); }
+    .empty-state h3 { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+    .empty-state p { font-size: 13px; }
+    .loading-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .skeleton { background: var(--white); border: 1px solid var(--border); border-radius: var(--card-r); overflow: hidden; animation: shimmer 1.4s infinite; }
+    .skeleton-media, .skeleton-line { background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; }
+    .skeleton-media { aspect-ratio: 16/9; }
+    .skeleton-body { padding: 14px 16px; }
+    .skeleton-line { height: 10px; border-radius: 2px; margin-bottom: 8px; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    @media (max-width: 960px) { .page-header-inner { flex-direction: column; align-items: flex-start; } .page-counts { justify-content: flex-start; } }
+    @media (max-width: 720px) {
+      nav, .page-header, .filter-bar, .grid-wrap { padding-left: 16px; padding-right: 16px; }
+      .nav-page-name { max-width: 170px; }
+      .page-counts { gap: 14px; }
+      .count-item { min-width: 72px; text-align: left; }
+      .posts-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<nav>
+  <div class="nav-left">
+    <a href="/dashboard" class="back-btn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12,19 5,12 12,5"/></svg>
+      Back to Dashboard
+    </a>
+    <div class="nav-divider"></div>
+    <div class="nav-page-info">
+      <div class="nav-logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" fill="#fff"/></svg></div>
+      <span class="nav-page-name">All Content</span>
+    </div>
+  </div>
+  <div class="nav-right">
+    <a id="export-btn" href="/api/content/export" class="btn-export">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export CSV
+    </a>
+  </div>
+</nav>
+<div class="layout">
+  <div class="page-header">
+    <div class="page-header-inner">
+      <div class="page-meta">
+        <h2>All Scraped Content</h2>
+        <p>Deduplicated content collected across all saved sources.</p>
+      </div>
+      <div class="page-counts">
+        <div class="count-item"><div class="count-value" id="count-total">—</div><div class="count-label">Total Posts</div></div>
+        <div class="count-item"><div class="count-value" id="count-sources">—</div><div class="count-label">Sources</div></div>
+        <div class="count-item"><div class="count-value" id="count-video" style="color:var(--blue)">—</div><div class="count-label">Video</div></div>
+        <div class="count-item"><div class="count-value" id="count-image">—</div><div class="count-label">Image</div></div>
+        <div class="count-item"><div class="count-value" id="count-text" style="color:var(--muted)">—</div><div class="count-label">Text Only</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="category-bar" id="category-bar"></div>
+  <div class="filter-bar">
+    <button class="filter-btn active" data-type="all">All <span class="filter-count" id="fc-all">—</span></button>
+    <button class="filter-btn" data-type="video"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>Video<span class="filter-count" id="fc-video">—</span></button>
+    <button class="filter-btn" data-type="image"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg>Image<span class="filter-count" id="fc-image">—</span></button>
+    <button class="filter-btn" data-type="text"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/></svg>Text Only<span class="filter-count" id="fc-text">—</span></button>
+  </div>
+  <div class="grid-wrap">
+    <div id="posts-container">
+      <div class="loading-grid" id="skeletons">
+        <div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:40%"></div><div class="skeleton-line" style="width:90%"></div><div class="skeleton-line" style="width:70%"></div></div></div>
+        <div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:35%"></div><div class="skeleton-line" style="width:85%"></div><div class="skeleton-line" style="width:60%"></div></div></div>
+        <div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:45%"></div><div class="skeleton-line" style="width:95%"></div><div class="skeleton-line" style="width:75%"></div></div></div>
+        <div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:30%"></div><div class="skeleton-line" style="width:80%"></div><div class="skeleton-line" style="width:65%"></div></div></div>
+      </div>
+    </div>
+    <div class="pagination" id="pagination"></div>
+  </div>
+</div>
+<script>
+  const PAGE_SIZE = 48;
+  let currentType = 'all';
+  let currentCategory = 'all';
+  let currentPage = 0;
+  let totalPosts = 0;
+  let typeCounts = { all: 0, video: 0, image: 0, text: 0 };
+  let categoryCounts = [];
+  function tryParse(val) { if (Array.isArray(val)) return val; if (typeof val === 'string') { try { return JSON.parse(val); } catch { return null; } } return null; }
+  function fmtDate(str) { if (!str || str === 'Unknown') return '—'; try { const d = new Date(str.replace(' UTC', 'Z')); return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); } catch { return str; } }
+  function firstImage(post) { const s3 = tryParse(post.image_s3_urls); if (s3 && s3.length) return s3[0]; const orig = tryParse(post.image_urls); if (orig && orig.length) return orig[0]; return null; }
+  function firstVideo(post) { return post.video_s3_url || null; }
+  function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function dlBadge(status) {
+    const map = { completed: 'dl-completed', pending: 'dl-pending', failed: 'dl-failed', downloading: 'dl-downloading' };
+    const labels = { completed: 'Saved to S3', pending: 'Pending', failed: 'Download Failed', downloading: 'Downloading' };
+    const cls = map[status] || 'dl-pending';
+    return `<span class="dl-badge ${cls}">${labels[status] || status}</span>`;
+  }
+  function contentQuery(params = {}) {
+    const qs = new URLSearchParams();
+    if (params.post_type) qs.set('post_type', params.post_type);
+    if (params.limit !== undefined) qs.set('limit', params.limit);
+    if (params.offset !== undefined) qs.set('offset', params.offset);
+    if (params.source_category && params.source_category !== 'all') qs.set('source_category', params.source_category);
+    const query = qs.toString();
+    return query ? `?${query}` : '';
+  }
+  function orderedCategories(categories) {
+    const priority = { Tunisia: 0, Palestine: 1, uncategorized: 999 };
+    return [...categories].sort((a, b) => {
+      const pa = priority[a.value] ?? 100;
+      const pb = priority[b.value] ?? 100;
+      if (pa !== pb) return pa - pb;
+      return String(a.label || '').localeCompare(String(b.label || ''));
+    });
+  }
+  function updateExportLink() {
+    document.getElementById('export-btn').href = `/api/content/export${contentQuery({ post_type: currentType, source_category: currentCategory })}`;
+  }
+  function renderCategoryBar(categories) {
+    categoryCounts = orderedCategories(categories || []);
+    const bar = document.getElementById('category-bar');
+    const allTotal = categoryCounts.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
+    const items = [{ value: 'all', label: 'All Categories', total: allTotal }, ...categoryCounts];
+    bar.innerHTML = items.map((item) => `
+      <button class="category-btn ${item.value === currentCategory ? 'active' : ''}" data-category="${escapeHtml(item.value)}">
+        ${escapeHtml(item.label)} <span class="filter-count">${item.total ?? 0}</span>
+      </button>
+    `).join('');
+    bar.querySelectorAll('.category-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const nextCategory = btn.dataset.category || 'all';
+        if (nextCategory === currentCategory) return;
+        currentCategory = nextCategory;
+        currentPage = 0;
+        renderCategoryBar(categoryCounts);
+        updateExportLink();
+        document.getElementById('posts-container').innerHTML = skeletonHTML();
+        document.getElementById('pagination').innerHTML = '';
+        loadCounts().then(() => loadPosts(currentType, currentPage));
+      });
+    });
+  }
+  function buildCard(post) {
+    const isVideo = !!post.has_video;
+    const isImage = !!post.has_image && !isVideo;
+    const isText = !isVideo && !isImage;
+    const sourceName = post.page_name || post.facebook_url || 'Unknown Source';
+    const sourceGallery = post.job_id ? `/gallery/${post.job_id}` : '#';
+    const posterSrc = (() => { const s3 = tryParse(post.image_s3_urls); if (s3 && s3.length) return s3[0]; const orig = tryParse(post.image_urls); if (orig && orig.length) return orig[0]; return ''; })();
+    const categoryChip = post.source_category ? `<span style="font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-lt);padding:2px 7px;border-radius:999px;white-space:nowrap">${escapeHtml(post.source_category)}</span>` : '';
+    let mediaHtml = '';
+    if (isVideo) {
+      const vidSrc = firstVideo(post);
+      if (vidSrc) {
+        mediaHtml = `<div class="card-media"><video src="${vidSrc}" preload="metadata" ${posterSrc ? `poster="${posterSrc}"` : ''} muted playsinline onmouseover="this.play()" onmouseout="this.pause();this.currentTime=0" style="cursor:pointer" onclick="window.open('${vidSrc}','_blank')"></video><span class="media-type-badge video">Video</span></div>`;
+      } else {
+        mediaHtml = `<div class="card-media">${posterSrc ? `<img src="${posterSrc}" alt="Video thumbnail" loading="lazy" style="width:100%;height:100%;object-fit:cover" />` : `<div class="media-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg></div>`}<span class="media-type-badge video">Video</span></div>`;
+      }
+    } else if (isImage) {
+      const imgSrc = firstImage(post);
+      if (imgSrc) {
+        mediaHtml = `<div class="card-media"><img src="${imgSrc}" alt="Post image" loading="lazy" onerror="this.parentNode.innerHTML='<div class=media-placeholder><svg width=40 height=40 viewBox=\'0 0 24 24\' fill=none stroke=#fff stroke-width=1.5><rect x=3 y=3 width=18 height=18 rx=2/><circle cx=8.5 cy=8.5 r=1.5/><polyline points=\'21,15 16,10 5,21\'/></svg></div>'" /><span class="media-type-badge image">Image</span></div>`;
+      } else {
+        mediaHtml = `<div class="card-media"><div class="media-placeholder"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg></div><span class="media-type-badge image">Image</span></div>`;
+      }
+    } else {
+      mediaHtml = `<div class="card-media" style="aspect-ratio:unset;min-height:80px;background:var(--bg);border-bottom:1px solid var(--border)"><div style="padding:20px 16px"><span class="media-type-badge text" style="position:static;display:inline-block;margin-bottom:8px">Text</span><p style="font-size:13px;color:var(--muted);line-height:1.5;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden">${escapeHtml(post.description || 'No text content.')}</p></div></div>`;
+    }
+    const desc = post.description || 'N/A';
+    const descHtml = desc === 'N/A' ? `<div class="card-desc na">No description available.</div>` : `<div class="card-desc">${escapeHtml(desc)}</div>`;
+    const postLink = post.external_redirect_url || post.post_link || '#';
+    const s3Url = (() => { if (post.download_status !== 'completed') return null; if (isVideo && post.video_s3_url) return post.video_s3_url; const imgs = tryParse(post.image_s3_urls); if (imgs && imgs.length) return imgs[0]; return null; })();
+    const s3Btn = s3Url ? `<a href="${s3Url}" target="_blank" rel="noopener" class="s3-btn" title="Open on S3"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="8 17 12 21 16 17"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.88 18.09A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.29"/></svg>S3</a>` : '';
+    return `<div class="post-card">${mediaHtml}<div class="card-body"><div class="card-source-row"><span class="card-source-label">Source</span><div style="display:flex;align-items:center;gap:8px;min-width:0;max-width:100%"><a href="${sourceGallery}" class="card-source-link">${escapeHtml(sourceName)}</a>${categoryChip}</div></div><div class="card-date">${fmtDate(post.published_date)}</div>${!isText ? descHtml : ''}</div><div class="card-footer"><div class="footer-links"><a href="${postLink}" target="_blank" rel="noopener" class="card-link">${post.external_link_label || 'View Original'}<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15,3 21,3 21,9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a><a href="${sourceGallery}" class="card-link">Source Gallery</a></div><div class="footer-right">${s3Btn}${dlBadge(post.download_status)}</div></div></div>`;
+  }
+  async function loadCounts() {
+    const res = await fetch(`/api/content/summary${contentQuery({ source_category: currentCategory })}`);
+    const data = await res.json();
+    if (!data.success) return;
+    typeCounts.all = data.total || 0; typeCounts.video = data.video || 0; typeCounts.image = data.image || 0; typeCounts.text = data.text || 0;
+    document.getElementById('count-total').textContent = typeCounts.all;
+    document.getElementById('count-sources').textContent = data.sources || 0;
+    document.getElementById('count-video').textContent = typeCounts.video;
+    document.getElementById('count-image').textContent = typeCounts.image;
+    document.getElementById('count-text').textContent = typeCounts.text;
+    document.getElementById('fc-all').textContent = typeCounts.all;
+    document.getElementById('fc-video').textContent = typeCounts.video;
+    document.getElementById('fc-image').textContent = typeCounts.image;
+    document.getElementById('fc-text').textContent = typeCounts.text;
+    renderCategoryBar(data.categories || []);
+    updateExportLink();
+  }
+  async function loadPosts(type, page) {
+    document.getElementById('skeletons') && (document.getElementById('skeletons').style.display = 'grid');
+    const offset = page * PAGE_SIZE;
+    const res = await fetch(`/api/content/posts${contentQuery({ post_type: type, limit: PAGE_SIZE, offset, source_category: currentCategory })}`);
+    const data = await res.json();
+    if (!data.success) return;
+    totalPosts = data.total;
+    const posts = data.posts;
+    const skel = document.getElementById('skeletons');
+    if (skel) skel.remove();
+    const container = document.getElementById('posts-container');
+    if (!posts.length) {
+      const selected = categoryCounts.find((item) => item.value === currentCategory);
+      const categoryLabel = currentCategory === 'all' ? '' : `${selected ? selected.label : currentCategory} `;
+      container.innerHTML = `<div class="posts-grid"><div class="empty-state"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.2;margin:0 auto 16px;display:block"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg><h3>No posts found</h3><p>No ${categoryLabel}${type === 'all' ? '' : type + ' '}posts are currently available in the combined library.</p></div></div>`;
+      renderPagination(0); return;
+    }
+    container.innerHTML = `<div class="posts-grid">${posts.map(buildCard).join('')}</div>`;
+    renderPagination(totalPosts);
+  }
+  function renderPagination(total) {
+    const pages = Math.ceil(total / PAGE_SIZE);
+    const pag = document.getElementById('pagination');
+    if (pages <= 1) { pag.innerHTML = ''; return; }
+    let html = '';
+    html += `<button class="page-btn" onclick="goPage(${currentPage - 1})" ${currentPage === 0 ? 'disabled' : ''}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15,18 9,12 15,6"/></svg></button>`;
+    const maxBtns = 7; let start = Math.max(0, currentPage - 3); let end = Math.min(pages - 1, start + maxBtns - 1); if (end - start < maxBtns - 1) start = Math.max(0, end - maxBtns + 1);
+    if (start > 0) { html += `<button class="page-btn" onclick="goPage(0)">1</button>`; if (start > 1) html += `<span class="page-info">...</span>`; }
+    for (let i = start; i <= end; i++) html += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="goPage(${i})">${i + 1}</button>`;
+    if (end < pages - 1) { if (end < pages - 2) html += `<span class="page-info">...</span>`; html += `<button class="page-btn" onclick="goPage(${pages - 1})">${pages}</button>`; }
+    html += `<button class="page-btn" onclick="goPage(${currentPage + 1})" ${currentPage === pages - 1 ? 'disabled' : ''}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9,18 15,12 9,6"/></svg></button>`;
+    html += `<span class="page-info">${total} posts total</span>`;
+    pag.innerHTML = html;
+  }
+  function skeletonHTML() {
+    return `<div class="loading-grid" id="skeletons"><div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:40%"></div><div class="skeleton-line" style="width:90%"></div><div class="skeleton-line" style="width:70%"></div></div></div><div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:35%"></div><div class="skeleton-line" style="width:85%"></div><div class="skeleton-line" style="width:60%"></div></div></div><div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:45%"></div><div class="skeleton-line" style="width:95%"></div><div class="skeleton-line" style="width:75%"></div></div></div><div class="skeleton"><div class="skeleton-media"></div><div class="skeleton-body"><div class="skeleton-line" style="width:30%"></div><div class="skeleton-line" style="width:80%"></div><div class="skeleton-line" style="width:65%"></div></div></div></div>`;
+  }
+  function goPage(n) {
+    const pages = Math.ceil(totalPosts / PAGE_SIZE); if (n < 0 || n >= pages) return; currentPage = n;
+    window.scrollTo({ top: document.querySelector('.category-bar').offsetTop, behavior: 'smooth' });
+    document.getElementById('posts-container').innerHTML = skeletonHTML(); loadPosts(currentType, currentPage);
+  }
+  document.querySelectorAll('.filter-btn').forEach((btn) => { btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active'); currentType = btn.dataset.type; currentPage = 0;
+    updateExportLink();
+    document.getElementById('posts-container').innerHTML = skeletonHTML(); document.getElementById('pagination').innerHTML = ''; loadCounts().then(() => loadPosts(currentType, currentPage));
+  }); });
+  loadCounts().then(() => loadPosts('all', 0));
+</script>
+</body>
+</html>
