@@ -33,12 +33,17 @@ from models.operations import (
     get_job,
     get_posts_for_all_jobs,
     get_posts_for_job,
+    get_global_stats,
+    mark_job_completed,
+    stream_all_s3_content,
     prepare_jobs_for_worker_startup,
     request_job_delete,
     request_job_pause,
     request_job_stop,
     rerun_job,
     retry_failed_downloads,
+    retry_single_post_download,
+    start_downloads,
 )
 from models.queue_worker import (
     FACEBOOK_SCRAPING_WORKER_COUNT,
@@ -98,6 +103,10 @@ async def lifespan(app: FastAPI):
         f"{TIKTOK_SCRAPING_WORKER_COUNT} TikTok scraping workers, "
         f"{INSTAGRAM_SCRAPING_WORKER_COUNT} Instagram scraping workers, and 1 download worker started."
     )
+
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, get_all_jobs, 500, 0)
+    loop.run_in_executor(None, get_global_stats)
 
     yield
 
@@ -459,6 +468,18 @@ def _serialize_job(job: dict) -> dict:
     serialized["can_continue"] = can_continue
     serialized["continue_mode"] = continue_mode
     serialized["source_platform"] = _detect_source_platform(serialized.get("facebook_url") or "")
+
+    # Live media download breakdown from fb_posts (may differ slightly from cached job counters)
+    dc = int(serialized.get("download_completed_count") or 0)
+    df = int(serialized.get("download_failed_count") or 0)
+    dp = int(serialized.get("download_pending_count") or 0)
+    sum_status = dc + df + dp
+    tm_job = int(serialized.get("total_media_count") or 0)
+    serialized["media_download_total"] = max(tm_job, sum_status) if sum_status else tm_job
+    serialized["download_completed_count"] = dc
+    serialized["download_failed_count"] = df
+    serialized["download_pending_count"] = dp
+
     return serialized
 
 
@@ -588,7 +609,7 @@ async def submit_job(
 
 
 @app.get("/api/jobs")
-async def list_jobs(
+def list_jobs(
     request: Request,
     limit: int = Query(100),
     offset: int = Query(0),
@@ -604,8 +625,14 @@ async def list_jobs(
     })
 
 
+@app.get("/api/global-stats")
+def global_stats_endpoint(request: Request):
+    require_auth(request)
+    return JSONResponse({"success": True, **get_global_stats()})
+
+
 @app.get("/api/jobs/{job_id}")
-async def get_job_detail(job_id: str, request: Request):
+def get_job_detail(job_id: str, request: Request):
     require_auth(request)
     job = get_job(job_id)
     if not job:
@@ -673,6 +700,42 @@ async def retry_downloads_existing_job(job_id: str, request: Request):
     return JSONResponse({"success": True, "job": _serialize_job(job)})
 
 
+@app.post("/api/jobs/{job_id}/start-downloads")
+async def start_downloads_endpoint(job_id: str, request: Request):
+    require_auth(request)
+    try:
+        job = start_downloads(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JSONResponse({"success": True, "job": _serialize_job(job)})
+
+
+@app.post("/api/jobs/{job_id}/mark-completed")
+async def mark_job_completed_endpoint(job_id: str, request: Request):
+    require_auth(request)
+    try:
+        job = mark_job_completed(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return JSONResponse({"success": True, "job": _serialize_job(job)})
+
+
+@app.post("/api/posts/{post_id}/retry-download")
+async def retry_single_post_download_endpoint(post_id: int, request: Request):
+    require_auth(request)
+    try:
+        result = retry_single_post_download(post_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if not result:
+        raise HTTPException(status_code=404, detail="Post not found")
+    return JSONResponse({"success": True, **result})
+
+
 @app.delete("/api/jobs/{job_id}")
 async def delete_existing_job(job_id: str, request: Request):
     require_auth(request)
@@ -694,7 +757,7 @@ async def delete_existing_job(job_id: str, request: Request):
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.get("/api/jobs/{job_id}/posts")
-async def get_job_posts(
+def get_job_posts(
     job_id: str,
     request: Request,
     post_type: str = Query("all"),
@@ -721,7 +784,7 @@ async def get_all_content_summary(
 
 
 @app.get("/api/content/posts")
-async def get_all_content_posts(
+def get_all_content_posts(
     request: Request,
     post_type: str = Query("all"),
     limit: int = Query(50),
@@ -834,6 +897,28 @@ async def export_all_content_csv(request: Request):
 
     return StreamingResponse(
         iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/content/export-s3")
+async def export_s3_content_csv(request: Request):
+    require_auth(request)
+    filename = f"s3_content_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+
+    def generate():
+        yield "Source Page,Source URL,S3 URL,Type\r\n"
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for row in stream_all_s3_content():
+            writer.writerow(row)
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+
+    return StreamingResponse(
+        generate(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

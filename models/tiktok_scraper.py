@@ -6,6 +6,7 @@ from urllib.parse import urlparse, urlunparse
 
 from yt_dlp import YoutubeDL
 
+from models.proxy import get_scrape_proxy_for_ytdlp
 from models.operations import (
     apply_job_control_action,
     get_job_post_count,
@@ -51,7 +52,7 @@ def _normalize_tiktok_account_url(account_url: str) -> tuple[str, str]:
     return normalized, username
 
 
-def _build_ydl_options(max_items: int | None = None, start_index: int = 1) -> dict:
+def _build_ydl_options(max_items: int | None = None, start_index: int = 1, worker_id: str = None) -> dict:
     playlist_start = max(int(start_index or 1), 1)
     opts = {
         'quiet': True,
@@ -67,6 +68,9 @@ def _build_ydl_options(max_items: int | None = None, start_index: int = 1) -> di
     }
     if max_items and int(max_items) > 0:
         opts['playlistend'] = playlist_start + int(max_items) - 1
+    proxy_url = get_scrape_proxy_for_ytdlp(worker_id=worker_id)
+    if proxy_url:
+        opts['proxy'] = proxy_url
     return opts
 
 
@@ -136,9 +140,9 @@ def _sort_entries(entries: list[dict]) -> list[dict]:
     return [item[1] for item in enumerated]
 
 
-def _extract_info_once(account_url: str, max_items: int | None = None, start_index: int = 1):
+def _extract_info_once(account_url: str, max_items: int | None = None, start_index: int = 1, worker_id: str = None):
     normalized_url, username = _normalize_tiktok_account_url(account_url)
-    with YoutubeDL(_build_ydl_options(max_items=max_items, start_index=start_index)) as ydl:
+    with YoutubeDL(_build_ydl_options(max_items=max_items, start_index=start_index, worker_id=worker_id)) as ydl:
         info = ydl.extract_info(normalized_url, download=False)
     if not info:
         raise RuntimeError(f'No info returned from yt-dlp for {normalized_url}')
@@ -174,7 +178,7 @@ def _extract_info_once(account_url: str, max_items: int | None = None, start_ind
     }, entries
 
 
-def extract_tiktok_account_entries(account_url: str, max_items: int | None = None, start_index: int = 1):
+def extract_tiktok_account_entries(account_url: str, max_items: int | None = None, start_index: int = 1, worker_id: str = None):
     target_items = max(int(max_items), 1) if max_items else None
     best_meta = None
     merged: dict[str, dict] = {}
@@ -182,7 +186,7 @@ def extract_tiktok_account_entries(account_url: str, max_items: int | None = Non
 
     for attempt in range(1, BATCH_RETRY_ATTEMPTS + 1):
         try:
-            meta, entries = _extract_info_once(account_url, max_items=max_items, start_index=start_index)
+            meta, entries = _extract_info_once(account_url, max_items=max_items, start_index=start_index, worker_id=worker_id)
             if best_meta is None:
                 best_meta = meta
             for entry in entries:
@@ -271,6 +275,7 @@ def run_tiktok_scraper(job: dict, worker_name: str = None):
                 normalized_url,
                 max_items=batch_limit,
                 start_index=next_index,
+                worker_id=worker_name,
             )
             update_job_progress(
                 job_id,

@@ -26,35 +26,26 @@ from models.operations import (
     update_job_status,
 )
 from models.instagram_scraper import run_instagram_scraper
+from models.proxy import apply_scrape_proxy, rotate_scrape_proxy
 from models.tiktok_scraper import run_tiktok_scraper
 
 load_dotenv()
 
-COOKIES_FILE = os.getenv("COOKIES_FILE", "./cookies.txt")
-COOKIE_POOL_DIR = Path(os.getenv("COOKIE_POOL_DIR", "./cookie_pool"))
-FACEBOOK_COOKIE_IMPORT_DIR = Path(os.getenv("FACEBOOK_COOKIE_IMPORT_DIR", "./cookie_refresh_20260319/fb_active_last_bundle"))
+FACEBOOK_COOKIE_DIR = Path(os.getenv("FACEBOOK_COOKIE_DIR", "./cookies/facebook"))
 FACEBOOK_SCRAPING_WORKER_COUNT = max(1, int(os.getenv("FACEBOOK_SCRAPING_WORKER_COUNT", "6")))
-FACEBOOK_PREFERRED_COOKIE_FILES = [
-    name.strip()
-    for name in os.getenv(
-        "FACEBOOK_PREFERRED_COOKIE_FILES",
-        "07.txt,08.txt,10.txt,02.txt,09.txt,01.txt,03.txt,04.txt,11.txt,12.txt,13.txt,14.txt,15.txt,16.txt,17.txt,18.txt,19.txt,20.txt",
-    ).split(",")
-    if name.strip()
-]
 
 # Facebook internal query ID for the scroll-triggered pagination query.
 # This ID is embedded in Facebook's JS bundle and may change after major deploys.
 REFETCH_QUERY_ID = "25997057593319516"
 
-POSTS_PER_PAGE = 5
-REQUEST_DELAY = 2.0
+POSTS_PER_PAGE = int(os.getenv("FACEBOOK_POSTS_PER_PAGE", "5"))
+REQUEST_DELAY = float(os.getenv("FACEBOOK_REQUEST_DELAY", "2.0"))
 MAX_STALE_PAGES = 5
 MAX_CYCLE_REBOOTSTRAP_RETRIES = 5
 GOOD_CHECKPOINT_HISTORY_LIMIT = 20
-REBOOTSTRAP_EVERY = 150
-REST_EVERY = 100
-REST_DURATION = 20
+REBOOTSTRAP_EVERY = int(os.getenv("FACEBOOK_REBOOTSTRAP_EVERY", "150"))
+REST_EVERY = int(os.getenv("FACEBOOK_REST_EVERY", "100"))
+REST_DURATION = float(os.getenv("FACEBOOK_REST_DURATION", "20"))
 
 GET_HEADERS = {
     "User-Agent": (
@@ -79,7 +70,7 @@ GET_HEADERS = {
 # ──────────────────────────────────────────────────────────────────────────────
 
 def load_cookies(session: requests.Session, cookie_file=None) -> int:
-    path = Path(cookie_file or COOKIES_FILE)
+    path = Path(cookie_file) if cookie_file else (FACEBOOK_COOKIE_DIR / "01.txt")
     if not path.exists():
         logging.warning(f"[Scraper] Cookies file not found: {path}")
         return 0
@@ -122,16 +113,9 @@ def _worker_cookie_pool(worker_name: str = None) -> list[Path]:
         if match:
             worker_num = max(int(match.group(1)), 1)
 
-    if FACEBOOK_COOKIE_IMPORT_DIR.exists():
-        discovered = [p for p in FACEBOOK_COOKIE_IMPORT_DIR.glob('*.txt') if p.is_file()]
-        discovered.sort(key=_numeric_sort_key)
-        preferred_map = {name: FACEBOOK_COOKIE_IMPORT_DIR / name for name in FACEBOOK_PREFERRED_COOKIE_FILES}
-        files = [preferred_map[name] for name in FACEBOOK_PREFERRED_COOKIE_FILES if preferred_map.get(name) and preferred_map[name].exists()]
-        seen = {str(p) for p in files}
-        for path in discovered:
-            if str(path) in seen:
-                continue
-            files.append(path)
+    if FACEBOOK_COOKIE_DIR.exists():
+        files = [p for p in FACEBOOK_COOKIE_DIR.glob('*.txt') if p.is_file()]
+        files.sort(key=_numeric_sort_key)
         if files:
             primary_count = min(FACEBOOK_SCRAPING_WORKER_COUNT, len(files))
             primaries = files[:primary_count]
@@ -154,25 +138,11 @@ def _worker_cookie_pool(worker_name: str = None) -> list[Path]:
                 deduped.append(path)
             return deduped
 
-    pool = []
-    if COOKIE_POOL_DIR.exists():
-        for path in sorted(COOKIE_POOL_DIR.glob(f"worker{worker_num}_*.txt")):
-            if path.is_file():
-                pool.append(path)
-    if not pool:
-        pool.append(Path(COOKIES_FILE))
-    deduped = []
-    seen = set()
-    for path in pool:
-        key = str(Path(path))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(Path(path))
-    return deduped
+    logging.warning("[Scraper] No Facebook cookie files found in %s", FACEBOOK_COOKIE_DIR)
+    return []
 
 
-def _open_cookie_context(cookie_pool: list, start_index: int, target_page: str, job_id: str, reason: str):
+def _open_cookie_context(cookie_pool: list, start_index: int, target_page: str, job_id: str, reason: str, worker_name: str = None):
     if not cookie_pool:
         raise RecoverableScrapePause("No cookie files are configured for this worker")
 
@@ -180,6 +150,7 @@ def _open_cookie_context(cookie_pool: list, start_index: int, target_page: str, 
     for cookie_index in range(max(int(start_index or 0), 0), len(cookie_pool)):
         cookie_file = cookie_pool[cookie_index]
         session = requests.Session()
+        apply_scrape_proxy(session, worker_id=worker_name)
         try:
             n_cookies = load_cookies(session, cookie_file)
             if n_cookies == 0:
@@ -782,6 +753,7 @@ def run_scraper(job: dict, worker_name: str = None):
             target_page,
             job_id,
             "initial bootstrap",
+            worker_name=worker_name,
         )
 
         page_name = bootstrap.get("page_name") or source_page
@@ -824,12 +796,14 @@ def run_scraper(job: dict, worker_name: str = None):
                 except Exception:
                     pass
 
+            rotate_scrape_proxy(worker_name or job_id)
             cookie_index, session, bootstrap, cookie_file = _open_cookie_context(
                 cookie_pool,
                 next_cookie_index,
                 target_page,
                 job_id,
                 reason,
+                worker_name=worker_name,
             )
             page_name = bootstrap.get("page_name") or page_name
             page_id = bootstrap.get("user_id") or page_id
@@ -892,7 +866,18 @@ def run_scraper(job: dict, worker_name: str = None):
                 total_saved,
             )
 
-            data = gql_post(session, bootstrap, target_page, cursor=request_cursor)
+            data = None
+            for _gql_attempt in range(1, 4):
+                try:
+                    data = gql_post(session, bootstrap, target_page, cursor=request_cursor)
+                    break
+                except Exception as gql_exc:
+                    logging.warning(
+                        f"[Scraper] [{job_id}] GraphQL request failed attempt {_gql_attempt}/3: {gql_exc}"
+                    )
+                    if _gql_attempt < 3:
+                        time.sleep(REQUEST_DELAY * 2)
+                        rotate_cookie(f"GraphQL error: {gql_exc}", request_cursor, current_page_num, page_skip_posts)
             if not data:
                 rotate_cookie("empty GraphQL response", request_cursor, current_page_num, page_skip_posts)
                 time.sleep(REQUEST_DELAY)

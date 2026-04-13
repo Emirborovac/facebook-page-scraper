@@ -1,12 +1,38 @@
 import hashlib
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timedelta
+from threading import Lock
 from urllib.parse import urlparse
 
 from models.database import get_connection
 from models.s3_upload import delete_s3_objects
+
+
+# ── Simple TTL cache for expensive aggregation queries ──────────────────
+_cache: dict[str, tuple[float, object]] = {}
+_cache_lock = Lock()
+
+
+def _cache_get(key: str, ttl: float):
+    with _cache_lock:
+        entry = _cache.get(key)
+        if entry and (time.monotonic() - entry[0]) < ttl:
+            return entry[1]
+    return None
+
+
+def _cache_set(key: str, value):
+    with _cache_lock:
+        _cache[key] = (time.monotonic(), value)
+
+
+def invalidate_cache(*keys):
+    with _cache_lock:
+        for k in keys:
+            _cache.pop(k, None)
 
 RUNNING_STATUSES = {"scraping", "downloading_content"}
 IDLE_STATUSES = {"pending", "paused", "stopped", "completed", "failed"}
@@ -39,11 +65,37 @@ def create_job(job_id: str, facebook_url: str, date_from=None, date_to=None, max
         conn.close()
 
 
+_POST_DOWNLOAD_STATS_SUBQUERY = """(
+    SELECT job_id,
+           SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS download_completed_count,
+           SUM(CASE WHEN download_status = 'failed' THEN 1 ELSE 0 END) AS download_failed_count,
+           SUM(CASE WHEN download_status IN ('pending', 'downloading') THEN 1 ELSE 0 END) AS download_pending_count
+    FROM fb_posts
+    GROUP BY job_id
+) AS dlstats"""
+
+
 def get_job(job_id: str):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM fb_scrape_jobs WHERE job_id = %s", (job_id,))
+            cur.execute(
+                """SELECT j.*,
+                          COALESCE(dlstats.download_completed_count, 0) AS download_completed_count,
+                          COALESCE(dlstats.download_failed_count, 0) AS download_failed_count,
+                          COALESCE(dlstats.download_pending_count, 0) AS download_pending_count
+                   FROM fb_scrape_jobs j
+                   LEFT JOIN (
+                       SELECT job_id,
+                              SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS download_completed_count,
+                              SUM(CASE WHEN download_status = 'failed' THEN 1 ELSE 0 END) AS download_failed_count,
+                              SUM(CASE WHEN download_status IN ('pending', 'downloading') THEN 1 ELSE 0 END) AS download_pending_count
+                       FROM fb_posts
+                       WHERE job_id = %s
+                   ) AS dlstats ON dlstats.job_id = j.job_id
+                   WHERE j.job_id = %s""",
+                (job_id, job_id),
+            )
             return cur.fetchone()
     finally:
         conn.close()
@@ -369,6 +421,59 @@ def continue_job(job_id: str):
     return get_job(job_id)
 
 
+def start_downloads(job_id: str):
+    """Queue a stopped/failed/paused job for downloading its pending posts."""
+    job = get_job(job_id)
+    if not job:
+        return None
+    if job["status"] not in ("stopped", "failed", "paused", "completed"):
+        raise ValueError(f"Cannot start downloads for a job with status '{job['status']}'")
+
+    conn = get_connection()
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) AS total,
+                          SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS downloaded,
+                          SUM(CASE WHEN download_status IN ('pending', 'downloading') THEN 1 ELSE 0 END) AS pending
+                   FROM fb_posts WHERE job_id = %s""",
+                (job_id,),
+            )
+            counts = cur.fetchone() or {}
+            total_media = int(counts.get("total") or 0)
+            downloaded_media = int(counts.get("downloaded") or 0)
+            pending = int(counts.get("pending") or 0)
+            if total_media <= 0:
+                raise ValueError("This job has no posts to download")
+            if pending <= 0:
+                raise ValueError("This job has no pending downloads — use Retry Downloads if there are failures")
+
+            cur.execute(
+                """UPDATE fb_scrape_jobs
+                   SET status = 'downloading_content',
+                       resume_stage = 'downloading_content',
+                       control_action = NULL,
+                       error_message = NULL,
+                       active_worker_stage = NULL,
+                       active_worker_token = NULL,
+                       total_media_count = %s,
+                       total_media_downloaded = %s,
+                       completed_at = NULL
+                   WHERE job_id = %s""",
+                (total_media, downloaded_media, job_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    invalidate_cache("global_stats")
+    return get_job(job_id)
+
+
 def retry_failed_downloads(job_id: str):
     job = get_job(job_id)
     if not job:
@@ -430,6 +535,20 @@ def retry_failed_downloads(job_id: str):
     finally:
         conn.close()
 
+    return get_job(job_id)
+
+
+def mark_job_completed(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        return None
+    if job["status"] not in {"stopped", "failed", "paused"}:
+        raise ValueError("Only stopped, failed, or paused jobs can be marked as completed")
+    update_job_status(job_id, "completed", extra={
+        "resume_stage": None,
+        "control_action": None,
+        "error_message": None,
+    })
     return get_job(job_id)
 
 
@@ -551,17 +670,21 @@ def delete_job(job_id: str):
 
 
 def get_all_jobs(limit=100, offset=0):
+    cache_key = f"all_jobs:{limit}:{offset}"
+    cached = _cache_get(cache_key, ttl=5)
+    if cached is not None:
+        return cached
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT j.*, pstats.oldest_published_timestamp
+                """SELECT j.*,
+                          (SELECT MIN(published_timestamp) FROM fb_posts WHERE job_id = j.job_id) AS oldest_published_timestamp,
+                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'completed') AS download_completed_count,
+                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'failed') AS download_failed_count,
+                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status IN ('pending', 'downloading')) AS download_pending_count
                    FROM fb_scrape_jobs j
-                   LEFT JOIN (
-                       SELECT job_id, MIN(published_timestamp) AS oldest_published_timestamp
-                       FROM fb_posts
-                       GROUP BY job_id
-                   ) pstats ON pstats.job_id = j.job_id
                    ORDER BY j.created_at DESC
                    LIMIT %s OFFSET %s""",
                 (limit, offset),
@@ -571,7 +694,82 @@ def get_all_jobs(limit=100, offset=0):
             total = cur.fetchone()["total"]
             cur.execute("SELECT status, COUNT(*) AS cnt FROM fb_scrape_jobs GROUP BY status")
             stats = {row["status"]: row["cnt"] for row in cur.fetchall()}
-            return {"jobs": jobs, "total": total, "stats": stats}
+            result = {"jobs": jobs, "total": total, "stats": stats}
+            _cache_set(cache_key, result)
+            return result
+    finally:
+        conn.close()
+
+
+def get_global_stats():
+    cached = _cache_get("global_stats", ttl=10)
+    if cached is not None:
+        return cached
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS total_pages, COALESCE(SUM(total_posts_scraped), 0) AS total_posts FROM fb_scrape_jobs")
+            jobs_row = cur.fetchone()
+            cur.execute("""
+                SELECT
+                    SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS total_media_s3,
+                    SUM(CASE WHEN download_status = 'failed' THEN 1 ELSE 0 END) AS total_media_failed,
+                    SUM(CASE WHEN download_status = 'completed' AND has_video = 1 THEN 1 ELSE 0 END) AS s3_videos,
+                    SUM(CASE WHEN download_status = 'completed' AND has_image = 1 AND has_video = 0 THEN 1 ELSE 0 END) AS s3_images,
+                    SUM(CASE WHEN download_status = 'completed' AND has_video = 0 AND has_image = 0 THEN 1 ELSE 0 END) AS s3_text
+                FROM fb_posts
+            """)
+            dl_row = cur.fetchone()
+            result = {
+                "total_pages": int(jobs_row["total_pages"] or 0),
+                "total_posts": int(jobs_row["total_posts"] or 0),
+                "total_media_s3": int(dl_row["total_media_s3"] or 0),
+                "total_media_failed": int(dl_row["total_media_failed"] or 0),
+                "s3_videos": int(dl_row["s3_videos"] or 0),
+                "s3_images": int(dl_row["s3_images"] or 0),
+                "s3_text": int(dl_row["s3_text"] or 0),
+            }
+            _cache_set("global_stats", result)
+            return result
+    finally:
+        conn.close()
+
+
+def stream_all_s3_content():
+    """Generator that yields rows of (page_name, facebook_url, s3_url, media_type)
+    for every S3 link across all completed posts. Uses SSSCursor for streaming."""
+    import pymysql.cursors
+    conn = get_connection()
+    try:
+        cur = conn.cursor(pymysql.cursors.SSDictCursor)
+        cur.execute("""
+            SELECT j.page_name, j.facebook_url AS source_url,
+                   p.video_s3_url, p.image_s3_urls, p.has_video, p.has_image
+            FROM fb_posts p
+            JOIN fb_scrape_jobs j ON j.job_id = p.job_id
+            WHERE p.download_status = 'completed'
+            ORDER BY j.page_name, p.id
+        """)
+        while True:
+            row = cur.fetchone()
+            if row is None:
+                break
+            page = row["page_name"] or row["source_url"] or ""
+            source = row["source_url"] or ""
+            if row["video_s3_url"]:
+                yield (page, source, row["video_s3_url"], "video")
+            img_json = row.get("image_s3_urls")
+            if img_json:
+                try:
+                    urls = json.loads(img_json) if isinstance(img_json, str) else img_json
+                    if isinstance(urls, list):
+                        for url in urls:
+                            if url:
+                                yield (page, source, url, "image")
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        cur.close()
     finally:
         conn.close()
 
@@ -1104,6 +1302,8 @@ def get_posts_for_job(job_id: str, post_type: str = "all", limit: int = 50, offs
                 where += " AND has_image = 1 AND has_video = 0"
             elif post_type == "text":
                 where += " AND has_video = 0 AND has_image = 0"
+            elif post_type == "failed":
+                where += " AND download_status = 'failed'"
 
             cur.execute(f"SELECT COUNT(*) AS total FROM fb_posts WHERE {where}", params)
             total = cur.fetchone()["total"]
@@ -1315,6 +1515,69 @@ def find_downloaded_media_for_post_link(post_link: str, platform: str | None = N
                 params,
             )
             return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def retry_single_post_download(post_id: int):
+    conn = get_connection()
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, job_id, download_status FROM fb_posts WHERE id = %s",
+                (post_id,),
+            )
+            post = cur.fetchone()
+            if not post:
+                return None
+            if post["download_status"] != "failed":
+                raise ValueError("Only posts with failed downloads can be retried")
+
+            cur.execute(
+                """UPDATE fb_posts
+                   SET download_status = 'pending', download_error = NULL
+                   WHERE id = %s AND download_status = 'failed'""",
+                (post_id,),
+            )
+
+            job_id = post["job_id"]
+            cur.execute(
+                "SELECT status FROM fb_scrape_jobs WHERE job_id = %s",
+                (job_id,),
+            )
+            job = cur.fetchone()
+            if job and job["status"] not in ("scraping", "downloading_content", "pending"):
+                cur.execute(
+                    """SELECT COUNT(*) AS total,
+                              SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS downloaded
+                       FROM fb_posts WHERE job_id = %s""",
+                    (job_id,),
+                )
+                counts = cur.fetchone() or {}
+                cur.execute(
+                    """UPDATE fb_scrape_jobs
+                       SET status = 'downloading_content',
+                           resume_stage = 'downloading_content',
+                           control_action = NULL,
+                           error_message = NULL,
+                           active_worker_stage = NULL,
+                           active_worker_token = NULL,
+                           total_media_count = %s,
+                           total_media_downloaded = %s,
+                           completed_at = NULL
+                       WHERE job_id = %s""",
+                    (
+                        int(counts.get("total") or 0),
+                        int(counts.get("downloaded") or 0),
+                        job_id,
+                    ),
+                )
+        conn.commit()
+        return {"post_id": post_id, "job_id": job_id}
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

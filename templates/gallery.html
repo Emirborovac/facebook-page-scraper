@@ -243,6 +243,16 @@
       color: var(--blue);
     }
 
+    .filter-btn.active[data-type="failed"] {
+      color: #e11d48;
+      border-bottom-color: #e11d48;
+    }
+
+    .filter-btn.active[data-type="failed"] .filter-count {
+      background: #fff1f2;
+      color: #e11d48;
+    }
+
     /* ── GRID ────────────────────────────────────────────────────── */
     .grid-wrap {
       max-width: 1400px;
@@ -410,6 +420,26 @@
     .dl-failed    { background: #fff1f2; color: #e11d48; }
     .dl-downloading { background: var(--blue-lt); color: var(--blue); }
 
+    .retry-dl-btn {
+      font-size: 11px;
+      font-weight: 600;
+      color: #d97706;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 8px;
+      border: 1px solid #fcd34d;
+      background: #fffbeb;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      letter-spacing: 0.2px;
+      transition: all 0.15s;
+    }
+    .retry-dl-btn:hover { background: #d97706; color: #fff; border-color: #d97706; }
+    .retry-dl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* ── PAGINATION ──────────────────────────────────────────────── */
     .pagination {
       display: flex;
@@ -558,6 +588,10 @@
           <div class="count-value" id="count-text" style="color:var(--muted)">—</div>
           <div class="count-label">Text Only</div>
         </div>
+        <div class="count-item">
+          <div class="count-value" id="count-failed" style="color:#e11d48">—</div>
+          <div class="count-label">Failed</div>
+        </div>
       </div>
     </div>
   </div>
@@ -591,6 +625,13 @@
       Text Only
       <span class="filter-count" id="fc-text">—</span>
     </button>
+    <button class="filter-btn" data-type="failed">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+      </svg>
+      Failed
+      <span class="filter-count" id="fc-failed">—</span>
+    </button>
   </div>
 
   <!-- GRID -->
@@ -619,7 +660,7 @@
   let currentType = 'all';
   let currentPage = 0;
   let totalPosts   = 0;
-  let typeCounts   = { all: 0, video: 0, image: 0, text: 0 };
+  let typeCounts   = { all: 0, video: 0, image: 0, text: 0, failed: 0 };
 
   // ── Helpers ────────────────────────────────────────────────────────
   function fmtDate(str) {
@@ -759,6 +800,15 @@
          </a>`
       : '';
 
+    const retryBtn = post.download_status === 'failed'
+      ? `<button class="retry-dl-btn" onclick="retryPostDownload(${post.id}, this)" title="Retry download">
+           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+             <polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+           </svg>
+           Retry
+         </button>`
+      : '';
+
     return `<div class="post-card">
       ${mediaHtml}
       <div class="card-body">
@@ -774,9 +824,36 @@
           </svg>
         </a>
         ${s3Btn}
+        ${retryBtn}
         ${dlBadge(post.download_status)}
       </div>
     </div>`;
+  }
+
+  // ── Retry single post download ─────────────────────────────────────
+  async function retryPostDownload(postId, btnEl) {
+    if (btnEl) { btnEl.disabled = true; btnEl.textContent = 'Retrying...'; }
+    try {
+      const res = await fetch(`/api/posts/${postId}/retry-download`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        alert(data.detail || data.error || 'Could not retry this download.');
+        if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Retry'; }
+        return;
+      }
+      if (btnEl) {
+        const card = btnEl.closest('.post-card');
+        if (card) {
+          const badge = card.querySelector('.dl-badge');
+          if (badge) { badge.className = 'dl-badge dl-pending'; badge.textContent = 'Pending'; }
+        }
+        btnEl.remove();
+      }
+      loadCounts();
+    } catch (err) {
+      alert('Network error. Please try again.');
+      if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23,4 23,10 17,10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Retry'; }
+    }
   }
 
   // ── Load job info ──────────────────────────────────────────────────
@@ -795,7 +872,7 @@
 
   // ── Load counts ────────────────────────────────────────────────────
   async function loadCounts() {
-    const types = ['all','video','image','text'];
+    const types = ['all','video','image','text','failed'];
     for (const t of types) {
       const res = await fetch(`/api/jobs/${JOB_ID}/posts?post_type=${t}&limit=1&offset=0`);
       const data = await res.json();
@@ -805,10 +882,12 @@
     document.getElementById('count-video').textContent = typeCounts.video;
     document.getElementById('count-image').textContent = typeCounts.image;
     document.getElementById('count-text').textContent  = typeCounts.text;
+    document.getElementById('count-failed').textContent = typeCounts.failed;
     document.getElementById('fc-all').textContent   = typeCounts.all;
     document.getElementById('fc-video').textContent = typeCounts.video;
     document.getElementById('fc-image').textContent = typeCounts.image;
     document.getElementById('fc-text').textContent  = typeCounts.text;
+    document.getElementById('fc-failed').textContent = typeCounts.failed;
   }
 
   // ── Load posts ─────────────────────────────────────────────────────

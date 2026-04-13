@@ -13,7 +13,7 @@ import logging
 import os
 import time
 import uuid
-from threading import Lock
+from threading import Event, Lock
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlparse
@@ -32,38 +32,22 @@ from models.operations import (
     update_job_status,
     update_post_download,
 )
+from models.proxy import apply_download_proxy, get_download_proxy_for_ytdlp
 from models.s3_upload import delete_local_file, upload_file_to_s3
 
 load_dotenv()
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./downloads")
-COOKIES_FILE = os.getenv("COOKIES_FILE", "./cookies.txt")
-INSTAGRAM_COOKIES_FILE = os.getenv("INSTAGRAM_COOKIES_FILE", "./instagram_cookies.txt")
-FACEBOOK_COOKIE_POOL_DIR = Path(os.getenv("FACEBOOK_COOKIE_IMPORT_DIR", "./cookie_refresh_20260319/fb_active_last_bundle"))
-FACEBOOK_PREFERRED_COOKIE_FILES = [
-    name.strip()
-    for name in os.getenv(
-        "FACEBOOK_PREFERRED_COOKIE_FILES",
-        "07.txt,08.txt,10.txt,02.txt,09.txt,01.txt,03.txt,04.txt,11.txt,12.txt,13.txt,14.txt,15.txt,16.txt,17.txt,18.txt,19.txt,20.txt",
-    ).split(",")
-    if name.strip()
-]
-INSTAGRAM_COOKIE_POOL_DIR = Path(os.getenv("INSTAGRAM_COOKIE_POOL_DIR", "./cookie_refresh_20260319/ig_active"))
-INSTAGRAM_PREFERRED_COOKIE_FILES = [
-    name.strip()
-    for name in os.getenv(
-        "INSTAGRAM_PREFERRED_COOKIE_FILES",
-        "01.txt,02.txt,03.txt,04.txt,05.txt,06.txt,07.txt,08.txt,09.txt,10.txt,11.txt,12.txt,13.txt,14.txt,15.txt,16.txt,17.txt,18.txt,19.txt,20.txt,21.txt,22.txt,23.txt,24.txt,25.txt,26.txt,27.txt,28.txt,29.txt,30.txt,31.txt,32.txt,33.txt,34.txt,35.txt,36.txt,37.txt,38.txt,39.txt",
-    ).split(",")
-    if name.strip()
-]
+FACEBOOK_COOKIE_DIR = Path(os.getenv("FACEBOOK_COOKIE_DIR", "./cookies/facebook"))
+INSTAGRAM_COOKIE_DIR = Path(os.getenv("INSTAGRAM_COOKIE_DIR", "./cookies/instagram"))
 _FB_COOKIE_LOCK = Lock()
 _FB_COOKIE_INDEX = 0
 _IG_COOKIE_LOCK = Lock()
 _IG_COOKIE_INDEX = 0
-MAX_WORKERS = 5
+MAX_WORKERS = int(os.getenv("DOWNLOAD_MAX_WORKERS", "5"))
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
+IG_DOWNLOAD_USE_COOKIES = os.getenv("IG_DOWNLOAD_USE_COOKIES", "false").strip().lower() in ("1", "true", "yes")
 
 
 def _video_source_platform(url: str) -> str:
@@ -84,7 +68,8 @@ def _load_cookies_into_session(session: requests.Session, platform: str = 'faceb
     if cookie_file is not None:
         path = Path(cookie_file)
     else:
-        path = Path(INSTAGRAM_COOKIES_FILE if platform == 'instagram' else COOKIES_FILE)
+        pool_dir = INSTAGRAM_COOKIE_DIR if platform == 'instagram' else FACEBOOK_COOKIE_DIR
+        path = pool_dir / "01.txt"
     if not path.exists():
         return 0
     if platform == 'instagram':
@@ -116,16 +101,11 @@ def _load_cookies_into_session(session: requests.Session, platform: str = 'faceb
 
 
 def _facebook_cookie_files() -> list[Path]:
-    if FACEBOOK_COOKIE_POOL_DIR.exists():
-        preferred_map = {name: FACEBOOK_COOKIE_POOL_DIR / name for name in FACEBOOK_PREFERRED_COOKIE_FILES}
-        ordered = [preferred_map[name] for name in FACEBOOK_PREFERRED_COOKIE_FILES if preferred_map.get(name) and preferred_map[name].exists()]
-        discovered = [p for p in sorted(FACEBOOK_COOKIE_POOL_DIR.glob('*.txt')) if p.is_file()]
-        seen = {p.resolve() for p in ordered}
-        ordered.extend([p for p in discovered if p.resolve() not in seen])
-        if ordered:
-            return ordered
-    fallback = Path(COOKIES_FILE)
-    return [fallback] if fallback.exists() else []
+    if FACEBOOK_COOKIE_DIR.exists():
+        files = sorted([p for p in FACEBOOK_COOKIE_DIR.glob('*.txt') if p.is_file()])
+        if files:
+            return files
+    return []
 
 
 def _next_facebook_cookie_file() -> Path | None:
@@ -140,12 +120,11 @@ def _next_facebook_cookie_file() -> Path | None:
 
 
 def _instagram_cookie_files() -> list[Path]:
-    if INSTAGRAM_COOKIE_POOL_DIR.exists():
-        preferred_map = {name: INSTAGRAM_COOKIE_POOL_DIR / name for name in INSTAGRAM_PREFERRED_COOKIE_FILES}
-        ordered = [preferred_map[name] for name in INSTAGRAM_PREFERRED_COOKIE_FILES if preferred_map.get(name) and preferred_map[name].exists()]
-        if ordered:
-            return ordered
-    return [Path(INSTAGRAM_COOKIES_FILE)]
+    if INSTAGRAM_COOKIE_DIR.exists():
+        files = sorted([p for p in INSTAGRAM_COOKIE_DIR.glob('*.txt') if p.is_file()])
+        if files:
+            return files
+    return []
 
 
 def _next_instagram_cookie_file() -> Path:
@@ -168,7 +147,11 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
     referer = 'https://www.instagram.com/' if platform == 'instagram' else 'https://www.facebook.com/'
     accept = '*/*' if platform == 'instagram' else 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
     session = requests.Session()
-    cookie_file = _next_instagram_cookie_file() if platform == 'instagram' else _next_facebook_cookie_file()
+    apply_download_proxy(session)
+    if platform == 'instagram':
+        cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
+    else:
+        cookie_file = _next_facebook_cookie_file()
     session.headers.update({
         'User-Agent': (
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -182,7 +165,8 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
     if cookie_file:
         logging.debug(f'[Downloader] Using {platform} cookie file {Path(cookie_file).name} for binary download')
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    retries = 1 if platform == 'instagram' else MAX_RETRIES
+    for attempt in range(1, retries + 1):
         try:
             response = session.get(url, stream=True, timeout=30)
             response.raise_for_status()
@@ -193,17 +177,78 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
             size = os.path.getsize(dest_path)
             if size >= MIN_IMAGE_BYTES or platform == 'instagram':
                 return True
-            logging.warning(f'[Downloader] Binary too small ({size}B) attempt {attempt}/{MAX_RETRIES}: {url[:80]}')
+            logging.warning(f'[Downloader] Binary too small ({size}B) attempt {attempt}/{retries}: {url[:80]}')
         except Exception as exc:
-            logging.warning(f'[Downloader] Binary download failed attempt {attempt}/{MAX_RETRIES} ({url[:80]}): {exc}')
-        if attempt < MAX_RETRIES:
+            logging.warning(f'[Downloader] Binary download failed attempt {attempt}/{retries} ({url[:80]}): {exc}')
+        if attempt < retries:
             time.sleep(RETRY_DELAY_SEC)
-    logging.warning(f'[Downloader] Binary download gave up after {MAX_RETRIES} attempts: {url[:80]}')
+    logging.warning(f'[Downloader] Binary download gave up after {retries} attempt(s): {url[:80]}')
     return False
 
 
-def _download_image(url: str, dest_path: str, platform: str = 'facebook') -> bool:
-    return _direct_binary_download(url, dest_path, platform)
+def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'instagram',
+                          playlist_item: int | None = None) -> bool:
+    """Use yt-dlp to download an image when the CDN URL has expired."""
+    if platform == 'instagram':
+        cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
+        referer = "https://www.instagram.com/"
+    else:
+        cookie_file = _next_facebook_cookie_file()
+        referer = "https://www.facebook.com/"
+    ydl_opts = {
+        "outtmpl": dest_path,
+        "quiet": True,
+        "no_warnings": True,
+        "socket_timeout": 30,
+        "retries": 2,
+        "skip_download": False,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Referer": referer,
+        },
+    }
+    if cookie_file and os.path.exists(cookie_file):
+        ydl_opts["cookiefile"] = str(cookie_file)
+    dl_proxy = get_download_proxy_for_ytdlp()
+    if dl_proxy:
+        ydl_opts["proxy"] = dl_proxy
+    if playlist_item is not None:
+        ydl_opts["playlist_items"] = str(playlist_item)
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([post_link])
+
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            return True
+
+        parent = Path(dest_path).parent
+        stem = Path(dest_path).stem
+        for candidate in parent.iterdir():
+            if candidate.stem.startswith(stem) and candidate.is_file() and candidate.stat().st_size > 0:
+                os.rename(str(candidate), dest_path)
+                return True
+
+        logging.warning("[Downloader] yt-dlp image fallback produced no file for %s", post_link[:80])
+        return False
+    except Exception as exc:
+        logging.warning("[Downloader] yt-dlp image fallback failed for %s: %s", post_link[:80], exc)
+        return False
+
+
+def _download_image(url: str, dest_path: str, platform: str = 'facebook',
+                    fallback_url: str | None = None, fallback_playlist_item: int | None = None) -> bool:
+    if _direct_binary_download(url, dest_path, platform):
+        return True
+    if fallback_url:
+        logging.info("[Downloader] CDN failed, trying yt-dlp fallback for %s image: %s", platform, fallback_url[:80])
+        return _ytdlp_image_fallback(fallback_url, dest_path, platform=platform,
+                                     playlist_item=fallback_playlist_item)
+    return False
 
 
 
@@ -213,12 +258,17 @@ def _download_image(url: str, dest_path: str, platform: str = 'facebook') -> boo
 
 def _download_video(url: str, dest_path: str, platform: str | None = None) -> bool:
     platform = platform or _video_source_platform(url)
-    if platform == "instagram":
-        return _direct_binary_download(url, dest_path, platform)
-    referer = "https://www.tiktok.com/" if platform == "tiktok" else "https://www.facebook.com/"
-    for attempt in range(1, MAX_RETRIES + 1):
+    referers = {"tiktok": "https://www.tiktok.com/", "instagram": "https://www.instagram.com/"}
+    referer = referers.get(platform, "https://www.facebook.com/")
+    retries = 1 if platform == 'instagram' else MAX_RETRIES
+    for attempt in range(1, retries + 1):
         try:
-            cookie_file = _next_facebook_cookie_file() if platform == "facebook" else None
+            if platform == "facebook":
+                cookie_file = _next_facebook_cookie_file()
+            elif platform == "instagram":
+                cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
+            else:
+                cookie_file = None
             ydl_opts = {
                 "outtmpl": dest_path,
                 "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -238,13 +288,15 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
                     "Referer": referer,
                 },
             }
-            if platform == "facebook":
+            if platform in ("facebook", "instagram"):
                 if cookie_file and os.path.exists(cookie_file):
                     ydl_opts["cookiefile"] = str(cookie_file)
-                elif os.path.exists(COOKIES_FILE):
-                    ydl_opts["cookiefile"] = COOKIES_FILE
                 else:
-                    logging.warning(f"[Downloader] Cookies file not found: {COOKIES_FILE}")
+                    logging.warning("[Downloader] No %s cookie file available for yt-dlp", platform)
+
+            dl_proxy = get_download_proxy_for_ytdlp()
+            if dl_proxy:
+                ydl_opts["proxy"] = dl_proxy
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
@@ -259,16 +311,16 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
             if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
                 return True
 
-            logging.warning(f"[Downloader] Video file missing after download attempt {attempt}/{MAX_RETRIES}: {url[:80]}")
+            logging.warning(f"[Downloader] Video file missing after download attempt {attempt}/{retries}: {url[:80]}")
         except yt_dlp.utils.DownloadError as exc:
-            logging.warning(f"[Downloader] yt_dlp DownloadError attempt {attempt}/{MAX_RETRIES} ({url[:80]}): {exc}")
+            logging.warning(f"[Downloader] yt_dlp DownloadError attempt {attempt}/{retries} ({url[:80]}): {exc}")
         except Exception as exc:
-            logging.warning(f"[Downloader] Video download error attempt {attempt}/{MAX_RETRIES} ({url[:80]}): {exc}")
+            logging.warning(f"[Downloader] Video download error attempt {attempt}/{retries} ({url[:80]}): {exc}")
 
-        if attempt < MAX_RETRIES:
+        if attempt < retries:
             time.sleep(RETRY_DELAY_SEC)
 
-    logging.warning(f"[Downloader] Video download gave up after {MAX_RETRIES} attempts: {url[:80]}")
+    logging.warning(f"[Downloader] Video download gave up after {retries} attempt(s): {url[:80]}")
     return False
 
 
@@ -301,10 +353,15 @@ def _cleanup_video_files(dest_path: str):
 # Per-post download task
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _process_post(post: dict, job_id: str) -> bool:
+def _process_post(post: dict, job_id: str, cancel: Event | None = None) -> bool:
     post_id = post["id"]
     post_link = post.get("post_link") or post.get("video_url") or ""
     platform = _video_source_platform(post_link)
+
+    if cancel and cancel.is_set():
+        update_post_download(post_id, "pending")
+        return False
+
     update_post_download(post_id, "downloading")
 
     if platform == 'tiktok':
@@ -357,11 +414,18 @@ def _process_post(post: dict, job_id: str) -> bool:
     uid = str(uuid.uuid4())[:8]
 
     if has_image:
+        fallback_url = post_link if post_link and platform in ('instagram', 'facebook') else None
+        num_images = len(image_urls)
         for idx, image_url in enumerate(image_urls):
+            if cancel and cancel.is_set():
+                update_post_download(post_id, "pending")
+                return False
             local_path = os.path.join(OUTPUT_DIR, f"{uid}_img_{idx}.jpg")
             s3_name = f"{job_id}/{uid}_img_{idx}.jpg"
+            fb_item = (idx + 1) if num_images > 1 else None
             try:
-                if _download_image(image_url, local_path, platform=platform):
+                if _download_image(image_url, local_path, platform=platform,
+                                   fallback_url=fallback_url, fallback_playlist_item=fb_item):
                     url_out, key = upload_file_to_s3(local_path, s3_name, content_type="image/jpeg")
                     s3_image_urls.append(url_out)
                     s3_image_keys.append(key)
@@ -372,11 +436,16 @@ def _process_post(post: dict, job_id: str) -> bool:
             finally:
                 delete_local_file(local_path)
 
+    if cancel and cancel.is_set():
+        update_post_download(post_id, "pending")
+        return False
+
     if has_video:
         local_path = os.path.join(OUTPUT_DIR, f"{uid}_video.mp4")
         s3_name = f"{job_id}/{uid}_video.mp4"
+        dl_url = post_link if platform == "instagram" and post_link else video_url
         try:
-            if _download_video(video_url, local_path, platform=platform):
+            if _download_video(dl_url, local_path, platform=platform):
                 url_out, key = upload_file_to_s3(local_path, s3_name, content_type="video/mp4")
                 s3_video_url = url_out
                 s3_video_key = key
@@ -431,6 +500,7 @@ def download_job_media(job: dict):
 
         pending_action = None
         post_iter = iter(posts)
+        cancel = Event()
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             in_flight = {}
@@ -442,7 +512,7 @@ def download_job_media(job: dict):
                         post = next(post_iter)
                     except StopIteration:
                         break
-                    future = pool.submit(_process_post, post, job_id)
+                    future = pool.submit(_process_post, post, job_id, cancel)
                     in_flight[future] = post
 
             fill_pool()
@@ -462,30 +532,35 @@ def download_job_media(job: dict):
                     return
 
             while in_flight:
-                done_set, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED)
+                done_set, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED, timeout=2)
+
+                if not pending_action:
+                    state = get_job_control_state(job_id)
+                    if not state:
+                        pending_action = "delete"
+                    elif state.get("control_action"):
+                        pending_action = state["control_action"]
+
+                if pending_action and not cancel.is_set():
+                    cancel.set()
+                    logging.info(f"[Downloader] [{job_id}] Cancel signal sent — draining {len(in_flight)} in-flight tasks")
+
                 for future in done_set:
                     in_flight.pop(future, None)
                     try:
                         future.result()
                     except Exception as exc:
                         logging.error(f"[Downloader] [{job_id}] Future error: {exc}")
+
+                if not cancel.is_set():
                     progress = get_download_progress(job_id)
                     update_job_progress(job_id, total_media_count=progress["total"], total_media_downloaded=progress["completed"])
                     logging.info(f"[Downloader] [{job_id}] Media progress: {progress['completed']}/{progress['total']} (failed={progress['failed']} remaining={progress['remaining']})")
-
-                state = get_job_control_state(job_id)
-                if not state:
-                    pending_action = pending_action or "delete"
-                elif not pending_action and state.get("control_action"):
-                    pending_action = state["control_action"]
-                    logging.info(f"[Downloader] [{job_id}] Control action requested: {pending_action}")
-
-                if not pending_action:
                     fill_pool()
 
         if pending_action:
             action = apply_job_control_action(job_id, "downloading_content")
-            logging.info(f"[Downloader] [{job_id}] Control action applied after in-flight work: {action}")
+            logging.info(f"[Downloader] [{job_id}] Control action applied: {action}")
             return
 
         progress = get_download_progress(job_id)

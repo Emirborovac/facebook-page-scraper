@@ -74,6 +74,131 @@
       gap: 20px;
     }
 
+    .nav-stats {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 12px;
+      border-left: 1px solid rgba(255,255,255,0.08);
+      border-right: 1px solid rgba(255,255,255,0.08);
+      margin: 0 4px;
+    }
+
+    .nav-stat {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+    }
+
+    .nav-stat-value {
+      font-size: 13px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.85);
+      letter-spacing: -0.3px;
+      line-height: 1;
+    }
+
+    .nav-stat-label {
+      font-size: 9px;
+      font-weight: 500;
+      color: rgba(255,255,255,0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      line-height: 1;
+    }
+
+    .nav-stat-value.green { color: #4ade80; }
+    .nav-stat-value.red { color: #fb7185; }
+
+    .nav-stat-tip {
+      position: relative;
+      cursor: default;
+    }
+
+    .nav-stat-tip .tip-popup {
+      display: none;
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 6px;
+      padding: 10px 14px;
+      min-width: 160px;
+      z-index: 200;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    }
+
+    .nav-stat-tip .tip-popup::before {
+      content: '';
+      position: absolute;
+      top: -5px;
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+      width: 8px;
+      height: 8px;
+      background: #1a1a2e;
+      border-left: 1px solid rgba(255,255,255,0.12);
+      border-top: 1px solid rgba(255,255,255,0.12);
+    }
+
+    .nav-stat-tip:hover .tip-popup {
+      display: block;
+    }
+
+    .tip-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 3px 0;
+    }
+
+    .tip-row-label {
+      font-size: 11px;
+      color: rgba(255,255,255,0.5);
+      white-space: nowrap;
+    }
+
+    .tip-row-value {
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.85);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .tip-divider {
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 5px 0;
+    }
+
+    .nav-export-btn {
+      height: 28px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 3px;
+      color: rgba(255,255,255,0.5);
+      font-family: 'Outfit', sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s;
+      text-decoration: none;
+    }
+
+    .nav-export-btn:hover {
+      border-color: #4ade80;
+      color: #4ade80;
+    }
+
     .nav-status {
       display: flex;
       align-items: center;
@@ -660,6 +785,127 @@
       white-space: nowrap;
     }
 
+    /* ── OPS MEDIA TOOLTIP ────────────────────────────────────────── */
+    .ops-media-cell {
+      position: relative;
+      display: inline-block;
+      cursor: default;
+    }
+
+    .ops-media-tip {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1a2e;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 8px 12px;
+      min-width: 150px;
+      z-index: 200;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+    }
+
+    .ops-media-tip::after {
+      content: '';
+      position: absolute;
+      bottom: -5px;
+      left: 50%;
+      transform: translateX(-50%) rotate(45deg);
+      width: 8px;
+      height: 8px;
+      background: #1a1a2e;
+      border-right: 1px solid rgba(255,255,255,0.1);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .ops-media-cell:hover .ops-media-tip {
+      display: block;
+    }
+
+    .ops-tip-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 2px 0;
+      font-size: 11px;
+      color: rgba(255,255,255,0.6);
+      white-space: nowrap;
+    }
+
+    .ops-tip-divider {
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+      margin: 4px 0;
+    }
+
+    /* ── OPS FILTER BAR ─────────────────────────────────────────── */
+    .ops-filter-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .ops-filter-btn {
+      height: 32px;
+      padding: 0 14px;
+      border: 1.5px solid var(--border);
+      border-radius: 2px;
+      background: var(--white);
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted);
+      cursor: pointer;
+      letter-spacing: 0.2px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s;
+    }
+
+    .ops-filter-btn:hover {
+      border-color: var(--text);
+      color: var(--text);
+    }
+
+    .ops-filter-btn.active {
+      background: var(--text);
+      border-color: var(--text);
+      color: var(--white);
+    }
+
+    .ops-filter-btn.active[data-status="completed"] {
+      background: #16a34a;
+      border-color: #16a34a;
+    }
+
+    .ops-filter-btn.active[data-status="failed"] {
+      background: #e11d48;
+      border-color: #e11d48;
+    }
+
+    .ops-filter-btn.active[data-status="stopped"] {
+      background: #7c3aed;
+      border-color: #7c3aed;
+    }
+
+    .ops-filter-count {
+      font-size: 10px;
+      font-weight: 700;
+      background: rgba(0,0,0,0.08);
+      padding: 1px 6px;
+      border-radius: 8px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    .ops-filter-btn.active .ops-filter-count {
+      background: rgba(255,255,255,0.25);
+    }
+
     /* ── SPINNER ─────────────────────────────────────────────────── */
     .spinner {
       width: 20px;
@@ -685,6 +931,50 @@
     <span class="nav-title">Facebook Scraper</span>
   </a>
   <div class="nav-right">
+    <div class="nav-stats" id="nav-stats">
+      <div class="nav-stat">
+        <span class="nav-stat-value" id="gs-pages">—</span>
+        <span class="nav-stat-label">Pages</span>
+      </div>
+      <div class="nav-stat">
+        <span class="nav-stat-value" id="gs-posts">—</span>
+        <span class="nav-stat-label">Posts</span>
+      </div>
+      <div class="nav-stat nav-stat-tip">
+        <span class="nav-stat-value green" id="gs-s3">—</span>
+        <span class="nav-stat-label">On S3</span>
+        <div class="tip-popup" id="s3-tip">
+          <div class="tip-row">
+            <span class="tip-row-label">Videos</span>
+            <span class="tip-row-value" id="gs-s3-videos">—</span>
+          </div>
+          <div class="tip-row">
+            <span class="tip-row-label">Images</span>
+            <span class="tip-row-value" id="gs-s3-images">—</span>
+          </div>
+          <div class="tip-row">
+            <span class="tip-row-label">Text Only</span>
+            <span class="tip-row-value" id="gs-s3-text">—</span>
+          </div>
+          <div class="tip-divider"></div>
+          <div class="tip-row">
+            <span class="tip-row-label">Total</span>
+            <span class="tip-row-value" style="color:#4ade80" id="gs-s3-total">—</span>
+          </div>
+        </div>
+      </div>
+      <div class="nav-stat">
+        <span class="nav-stat-value red" id="gs-failed">—</span>
+        <span class="nav-stat-label">Failed</span>
+      </div>
+      <a class="nav-export-btn" href="/api/content/export-s3" title="Export all S3 content as CSV">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        CSV
+      </a>
+    </div>
     <div class="nav-status">
       <div class="status-dot"></div>
       System Online
@@ -835,6 +1125,27 @@
         <h2>Operations</h2>
         <p>All completed, stopped, and failed scraping operations.</p>
       </div>
+      <div class="ops-filter-bar" id="ops-filter-bar">
+        <button class="ops-filter-btn active" data-status="all">
+          All
+          <span class="ops-filter-count" id="ofc-all">—</span>
+        </button>
+        <button class="ops-filter-btn" data-status="completed">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20,6 9,17 4,12"/></svg>
+          Completed
+          <span class="ops-filter-count" id="ofc-completed">—</span>
+        </button>
+        <button class="ops-filter-btn" data-status="failed">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+          Failed
+          <span class="ops-filter-count" id="ofc-failed">—</span>
+        </button>
+        <button class="ops-filter-btn" data-status="stopped">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="6" y="6" width="12" height="12"/></svg>
+          Stopped
+          <span class="ops-filter-count" id="ofc-stopped">—</span>
+        </button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -864,7 +1175,11 @@
   const OPS_PAGE_SIZE = 20;
   const STALLED_JOB_MS = 90 * 1000;
   const OPS_VISIBLE_STORAGE_KEY = 'fb-scraper-ops-visible';
+  const OPS_FILTER_STORAGE_KEY = 'fb-scraper-ops-filter';
   const PROCESS_SORT_STORAGE_KEY = 'fb-scraper-process-sort';
+  let opsStatusFilter = (() => {
+    try { return window.localStorage.getItem(OPS_FILTER_STORAGE_KEY) || 'all'; } catch { return 'all'; }
+  })();
   const PROCESS_STATUS_SORT_ORDER = {
     pending: 1,
     paused: 2,
@@ -912,8 +1227,43 @@
   document.querySelectorAll('[data-process-sort]').forEach(btn => {
     btn.addEventListener('click', () => setProcessSort(btn.dataset.processSort));
   });
+  document.querySelectorAll('#ops-filter-bar .ops-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      opsStatusFilter = btn.dataset.status;
+      try { window.localStorage.setItem(OPS_FILTER_STORAGE_KEY, opsStatusFilter); } catch {}
+      document.querySelectorAll('#ops-filter-bar .ops-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.status === opsStatusFilter));
+      opsVisible = OPS_PAGE_SIZE;
+      persistOpsVisible();
+      renderOperations();
+    });
+  });
+  document.querySelectorAll('#ops-filter-bar .ops-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.status === opsStatusFilter));
 
   // ── Helpers ────────────────────────────────────────────────────────
+  function fmtNum(n) {
+    n = Number(n || 0);
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
+    if (n >= 10_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
+    if (n >= 1_000) return n.toLocaleString('en');
+    return String(n);
+  }
+
+  async function fetchGlobalStats() {
+    try {
+      const res = await fetch('/api/global-stats');
+      const data = await res.json();
+      if (!data.success) return;
+      document.getElementById('gs-pages').textContent = fmtNum(data.total_pages);
+      document.getElementById('gs-posts').textContent = fmtNum(data.total_posts);
+      document.getElementById('gs-s3').textContent = fmtNum(data.total_media_s3);
+      document.getElementById('gs-failed').textContent = fmtNum(data.total_media_failed);
+      document.getElementById('gs-s3-videos').textContent = Number(data.s3_videos || 0).toLocaleString('en');
+      document.getElementById('gs-s3-images').textContent = Number(data.s3_images || 0).toLocaleString('en');
+      document.getElementById('gs-s3-text').textContent = Number(data.s3_text || 0).toLocaleString('en');
+      document.getElementById('gs-s3-total').textContent = Number(data.total_media_s3 || 0).toLocaleString('en');
+    } catch {}
+  }
+
   function fmtDate(iso) {
     if (!iso) return '—';
     try {
@@ -1170,13 +1520,41 @@
 
 
   function mediaCell(job) {
-    const total = job.total_media_count || 0;
-    const done  = job.total_media_downloaded || 0;
+    const c = Number(job.download_completed_count ?? job.total_media_downloaded ?? 0);
+    const f = Number(job.download_failed_count ?? 0);
+    const p = Number(job.download_pending_count ?? 0);
+    const total = Math.max(Number(job.total_media_count || 0), Number(job.media_download_total || 0), c + f + p);
     if (!total) return '<span style="color:var(--muted);font-size:12px">—</span>';
-    const pct = Math.round((done / total) * 100);
-    return `<div class="progress-wrap">
-      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-      <span class="progress-text">${done}/${total}</span>
+    const wC = (c / total) * 100;
+    const wF = (f / total) * 100;
+    const wP = Math.max(0, 100 - wC - wF);
+    const failedPart = f > 0 ? `<span style="color:#e11d48;font-weight:600">${f} failed</span> · ` : '';
+    const pendingPart = p > 0 ? `${p} waiting · ` : '';
+    return `<div class="progress-wrap" style="flex-direction:column;align-items:stretch;gap:5px;max-width:200px">
+      <div class="progress-bar-bg" style="display:flex;height:5px;padding:0;overflow:hidden">
+        <div title="Saved to S3" style="width:${wC}%;background:#16a34a;min-width:${c ? '1px' : '0'}"></div>
+        <div title="Download failed" style="width:${wF}%;background:#e11d48;min-width:${f ? '1px' : '0'}"></div>
+        <div title="Pending / in progress" style="width:${wP}%;background:#e5e7eb;min-width:${p ? '1px' : '0'}"></div>
+      </div>
+      <span class="progress-text" style="white-space:normal;line-height:1.35">${failedPart}${pendingPart}<strong>${c}</strong> / ${total} saved</span>
+    </div>`;
+  }
+
+  function opsMediaCell(job) {
+    const c = Number(job.download_completed_count ?? job.total_media_downloaded ?? 0);
+    const f = Number(job.download_failed_count ?? 0);
+    const p = Number(job.download_pending_count ?? 0);
+    const total = Math.max(Number(job.total_media_count || 0), Number(job.media_download_total || 0), c + f + p);
+    if (!total) return '<span style="color:var(--muted);font-size:12px">—</span>';
+    const tipRows = [];
+    tipRows.push(`<div class="ops-tip-row"><span>Saved to S3</span><span style="color:#16a34a;font-weight:600">${c.toLocaleString('en')}</span></div>`);
+    if (f > 0) tipRows.push(`<div class="ops-tip-row"><span>Failed</span><span style="color:#e11d48;font-weight:600">${f.toLocaleString('en')}</span></div>`);
+    if (p > 0) tipRows.push(`<div class="ops-tip-row"><span>Pending</span><span style="color:#d97706;font-weight:600">${p.toLocaleString('en')}</span></div>`);
+    tipRows.push(`<div class="ops-tip-divider"></div>`);
+    tipRows.push(`<div class="ops-tip-row"><span>Total</span><span style="font-weight:700">${total.toLocaleString('en')}</span></div>`);
+    return `<div class="ops-media-cell">
+      <span><strong>${c.toLocaleString('en')}</strong><span style="color:var(--muted);font-size:12px"> / ${total.toLocaleString('en')}</span></span>
+      <div class="ops-media-tip">${tipRows.join('')}</div>
     </div>`;
   }
 
@@ -1266,19 +1644,31 @@
     const tbody = document.getElementById('operations-tbody');
     const wrap  = document.getElementById('ops-load-more-wrap');
 
-    if (!allOpsJobs.length) {
+    const counts = { all: allOpsJobs.length, completed: 0, failed: 0, stopped: 0 };
+    allOpsJobs.forEach(j => { if (counts[j.status] !== undefined) counts[j.status]++; });
+    document.getElementById('ofc-all').textContent = counts.all;
+    document.getElementById('ofc-completed').textContent = counts.completed;
+    document.getElementById('ofc-failed').textContent = counts.failed;
+    document.getElementById('ofc-stopped').textContent = counts.stopped;
+
+    const filtered = opsStatusFilter === 'all' ? allOpsJobs : allOpsJobs.filter(j => j.status === opsStatusFilter);
+
+    if (!filtered.length) {
+      const msg = opsStatusFilter === 'all'
+        ? '<h3>No operations yet</h3><p>Completed, stopped, and failed scrapes will appear here.</p>'
+        : `<h3>No ${opsStatusFilter} operations</h3><p>No jobs with this status.</p>`;
       tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
         <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14,2 14,8 20,8"/>
         </svg></div>
-        <h3>No operations yet</h3><p>Completed, stopped, and failed scrapes will appear here.</p>
+        ${msg}
       </div></td></tr>`;
       wrap.style.display = 'none';
       return;
     }
 
-    const slice = allOpsJobs.slice(0, opsVisible);
+    const slice = filtered.slice(0, opsVisible);
     tbody.innerHTML = slice.map(job => {
       const isFailed    = job.status === 'failed';
       const hasSavedContent = (job.total_posts_scraped || 0) > 0;
@@ -1315,9 +1705,24 @@
             </button>
           `
         : '';
+      const dlFailed = Number(job.download_failed_count ?? 0);
+      const dlPending = Number(job.download_pending_count ?? 0);
+      const canStartDownloads = ['stopped', 'failed', 'paused', 'completed'].includes(job.status)
+        && (job.total_posts_scraped || 0) > 0
+        && dlPending > 0;
+      const startDownloadsAction = canStartDownloads
+        ? `
+            <button type="button" class="btn-action blue" onclick="startDownloads('${job.job_id}')" ${actionDisabled}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>Download Content
+            </button>
+          `
+        : '';
       const canRetryDownloads = ['failed', 'completed', 'stopped'].includes(job.status)
         && (job.total_media_count || 0) > 0
-        && (job.total_media_downloaded || 0) < (job.total_media_count || 0);
+        && dlFailed > 0;
       const retryDownloadsAction = canRetryDownloads
         ? `
             <button type="button" class="btn-action blue" onclick="retryDownloads('${job.job_id}')" ${actionDisabled}>
@@ -1328,10 +1733,22 @@
             </button>
           `
         : '';
+      const canMarkCompleted = ['stopped', 'failed', 'paused'].includes(job.status);
+      const markCompletedAction = canMarkCompleted
+        ? `
+            <button type="button" class="btn-action" onclick="markCompleted('${job.job_id}')" ${actionDisabled} style="border-color:#16a34a;color:#16a34a" onmouseover="this.style.background='#16a34a';this.style.color='#fff'" onmouseout="this.style.background='';this.style.color='#16a34a'">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="20,6 9,17 4,12"/>
+              </svg>Mark Completed
+            </button>
+          `
+        : '';
       const actions = `<div class="action-group">
             ${contentActions}
             ${continueAction}
+            ${startDownloadsAction}
             ${retryDownloadsAction}
+            ${markCompletedAction}
             <button type="button" class="btn-action amber" onclick="rerunJob('${job.job_id}')" ${actionDisabled}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <polyline points="23,4 23,10 17,10"/><polyline points="1,20 1,14 7,14"/>
@@ -1354,16 +1771,13 @@
         </td>
         <td>${statusBadge(job.status)}</td>
         <td><strong>${job.total_posts_scraped || 0}</strong></td>
-        <td>
-          <span style="font-weight:600">${job.total_media_downloaded || 0}</span>
-          <span style="color:var(--muted);font-size:12px"> / ${job.total_media_count || 0}</span>
-        </td>
+        <td>${opsMediaCell(job)}</td>
         <td style="font-size:12px;color:var(--muted)">${finishedAt}</td>
         <td>${actions}</td>
       </tr>`;
     }).join('');
 
-    wrap.style.display = opsVisible < allOpsJobs.length ? 'block' : 'none';
+    wrap.style.display = opsVisible < filtered.length ? 'block' : 'none';
   }
 
 
@@ -1441,6 +1855,23 @@
     }
   }
 
+  async function startDownloads(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Start downloading media for this job?')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/start-downloads`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not start downloads for this job.');
+      await fetchJobs();
+      activateTab('processes');
+    } catch (error) {
+      window.alert(error.message || 'Could not start downloads for this job.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
   async function retryDownloads(jobId) {
     if (pendingActionJobIds.has(jobId)) return;
     if (!window.confirm('Retry only the failed media downloads for this job without re-running scraping?')) return;
@@ -1453,6 +1884,22 @@
       activateTab('processes');
     } catch (error) {
       window.alert(error.message || 'Could not retry failed downloads for this job.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+
+  async function markCompleted(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    if (!window.confirm('Mark this job as completed? This will clear any error state.')) return;
+
+    setJobActionPending(jobId, true);
+    try {
+      const res = await fetch(`/api/jobs/${jobId}/mark-completed`, { method: 'POST' });
+      await parseActionResponse(res, 'Could not mark this job as completed.');
+      await fetchJobs();
+    } catch (error) {
+      window.alert(error.message || 'Could not mark this job as completed.');
     } finally {
       setJobActionPending(jobId, false);
     }
@@ -1516,7 +1963,9 @@
   });
 
   fetchJobs();
+  fetchGlobalStats();
   setInterval(fetchJobs, 5000);
+  setInterval(fetchGlobalStats, 30000);
 </script>
 </body>
 </html>
