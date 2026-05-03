@@ -1,5 +1,5 @@
 """
-Facebook Page Scraper — FastAPI application
+Social Media Ultimate Scraper — FastAPI application
 """
 
 import csv
@@ -13,7 +13,7 @@ from datetime import date, datetime
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
@@ -22,6 +22,7 @@ from fastapi.responses import (
 )
 from starlette.middleware.sessions import SessionMiddleware
 
+from models import cookie_admin
 from models.database import init_db
 from models.operations import (
     continue_job as continue_job_operation,
@@ -552,6 +553,106 @@ async def all_content_page(request: Request):
     if not is_authenticated(request):
         return RedirectResponse("/login", status_code=302)
     return HTMLResponse(_read_template("all_content.html"))
+
+
+@app.get("/cookies", response_class=HTMLResponse)
+async def cookies_page(request: Request):
+    if not is_authenticated(request):
+        return RedirectResponse("/login", status_code=302)
+    return HTMLResponse(_read_template("cookies.html"))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# API — Cookie management
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/cookies/inventory")
+def cookies_inventory_endpoint(request: Request):
+    require_auth(request)
+    return JSONResponse(cookie_admin.inventory())
+
+
+@app.post("/api/cookies/upload")
+async def cookies_upload_endpoint(
+    request: Request,
+    platform: str = Form(...),
+    location: str = Form("auto"),
+    files: list[UploadFile] = File(...),
+):
+    require_auth(request)
+    if platform not in cookie_admin.SCRAPER_PLATFORMS:
+        raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    payloads: list[tuple[str, bytes]] = []
+    for upload in files:
+        content = await upload.read()
+        payloads.append((upload.filename or "cookie.txt", content))
+
+    saved: list[dict] = []
+    errors: list[dict] = []
+    try:
+        if location == "auto":
+            saved = cookie_admin.auto_distribute_uploads(platform, payloads)
+        else:
+            for filename, content in payloads:
+                try:
+                    saved.append(cookie_admin.upload_cookie(platform, location, filename, content))
+                except ValueError as exc:
+                    errors.append({"filename": filename, "error": str(exc)})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return JSONResponse({"saved": saved, "errors": errors})
+
+
+@app.delete("/api/cookies/{platform}/{location:path}/{filename}")
+def cookies_delete_endpoint(platform: str, location: str, filename: str, request: Request):
+    require_auth(request)
+    try:
+        cookie_admin.delete_cookie(platform, location, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({"deleted": True})
+
+
+@app.post("/api/cookies/move")
+async def cookies_move_endpoint(
+    request: Request,
+    platform: str = Form(...),
+    source_location: str = Form(...),
+    dest_location: str = Form(...),
+    filename: str = Form(...),
+):
+    require_auth(request)
+    try:
+        result = cookie_admin.move_cookie(platform, source_location, dest_location, filename)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({"moved": True, "file": result})
+
+
+@app.post("/api/cookies/restore")
+async def cookies_restore_endpoint(
+    request: Request,
+    platform: str = Form(...),
+    source_location: str = Form(...),
+    filename: str = Form(...),
+    target_worker: int = Form(1),
+):
+    require_auth(request)
+    try:
+        result = cookie_admin.restore_from_trash(platform, source_location, filename, target_worker)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse({"restored": True, "file": result})
 
 
 @app.get("/out/facebook")

@@ -13,6 +13,7 @@ try:
 except ImportError:
     _CFFI = False
 
+from models.cookie_pool import CookiePool, load_worker_cookie_pool
 from models.proxy import apply_scrape_proxy, rotate_scrape_proxy
 from models.operations import (
     apply_job_control_action,
@@ -24,7 +25,7 @@ from models.operations import (
 )
 
 INSTAGRAM_COOKIE_DIR = Path(os.getenv("INSTAGRAM_COOKIE_DIR", "./cookies/instagram"))
-INSTAGRAM_SCRAPING_WORKER_COUNT = max(1, int(os.getenv("INSTAGRAM_SCRAPING_WORKER_COUNT", "3")))
+INSTAGRAM_SCRAPING_WORKER_COUNT = max(1, int(os.getenv("INSTAGRAM_SCRAPING_WORKER_COUNT", "5")))
 POSTS_PER_PAGE = max(int(os.getenv("INSTAGRAM_POSTS_PER_PAGE", "12")), 1)
 REQUEST_DELAY = float(os.getenv("INSTAGRAM_REQUEST_DELAY", "2.5"))
 MAX_STALE_PAGES = max(int(os.getenv("INSTAGRAM_MAX_STALE_PAGES", "3")), 1)
@@ -33,6 +34,8 @@ REST_DURATION = float(os.getenv("INSTAGRAM_REST_DURATION", "25"))
 APP_ID = os.getenv("INSTAGRAM_APP_ID", "936619743392459")
 FETCH_RETRY_ATTEMPTS = max(int(os.getenv("INSTAGRAM_FETCH_RETRY_ATTEMPTS", "4")), 1)
 FETCH_RETRY_DELAY = float(os.getenv("INSTAGRAM_FETCH_RETRY_DELAY", "45"))
+ROTATE_EVERY_PAGES = max(int(os.getenv("INSTAGRAM_ROTATE_EVERY_PAGES", "5")), 1)
+THROTTLE_COOLDOWN = float(os.getenv("INSTAGRAM_THROTTLE_COOLDOWN", "300"))
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -168,65 +171,25 @@ def fetch_page(session, user_id: str, csrf: str, username: str, max_id: str | No
     return response.json()
 
 
-def _is_retryable_fetch_error(exc: Exception) -> bool:
+def _is_throttle_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return 'status=429' in message or 'please wait a few minutes' in message
+
+
+def _is_burnt_cookie_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return (
-        'please wait a few minutes' in message
-        or 'require_login' in message
+        'require_login' in message
+        or 'login_required' in message
+        or 'challenge_required' in message
+        or 'checkpoint_required' in message
+        or 'consent_required' in message
         or 'status=401' in message
-        or 'status=429' in message
     )
 
 
-def _natural_cookie_sort_key(path: Path):
-    stem = path.stem
-    return (0, int(stem)) if stem.isdigit() else (1, stem)
-
-
-def _ordered_cookie_files() -> list[Path]:
-    if INSTAGRAM_COOKIE_DIR.exists():
-        files = sorted([p for p in INSTAGRAM_COOKIE_DIR.glob('*.txt') if p.is_file()])
-        if files:
-            return files
-    return []
-
-
 def _worker_cookie_pool(worker_name: str | None = None) -> list[Path]:
-    """Partition cookies so each worker gets a dedicated slice.
-
-    With 20 cookies and 5 workers each worker owns 4 cookies.
-    Other workers' cookies are appended as last-resort fallbacks.
-    """
-    files = _ordered_cookie_files()
-    if not files:
-        logging.warning("[InstagramScraper] No cookie files found in %s", INSTAGRAM_COOKIE_DIR)
-        return []
-
-    worker_num = 1
-    total_workers = INSTAGRAM_SCRAPING_WORKER_COUNT
-    if worker_name:
-        import re
-        match = re.search(r'(\d+)$', worker_name)
-        if match:
-            worker_num = max(int(match.group(1)), 1)
-
-    if total_workers <= 1 or len(files) <= 1:
-        return list(files)
-
-    per_worker = len(files) // total_workers
-    remainder = len(files) % total_workers
-
-    slices: list[list[Path]] = []
-    idx = 0
-    for w in range(total_workers):
-        count = per_worker + (1 if w < remainder else 0)
-        slices.append(files[idx:idx + count])
-        idx += count
-
-    my_slice = slices[(worker_num - 1) % total_workers]
-    others = [f for s in slices for f in s if f not in my_slice]
-
-    return my_slice + others
+    return load_worker_cookie_pool(INSTAGRAM_COOKIE_DIR, worker_name)
 
 
 def _open_profile_session(username: str, cookie_file=None, worker_id: str = None):
@@ -249,36 +212,54 @@ def _cookie_label(cookie_file) -> str:
     return Path(cookie_file).name
 
 
-def _open_cookie_context(cookie_pool: list[Path], start_index: int, username: str, job_id: str, reason: str, worker_name: str = None):
+def _open_cookie_context(pool: CookiePool, current_file: Path | None, username: str, job_id: str, reason: str, worker_name: str = None, worker_token: str = None):
     last_error = None
-    if not cookie_pool:
-        raise RecoverableInstagramPause('No Instagram sessions are configured')
-    start_index = max(int(start_index or 0), 0) % len(cookie_pool)
-    ordered_indices = list(range(start_index, len(cookie_pool))) + list(range(0, start_index))
-    for cookie_index in ordered_indices:
-        cookie_file = cookie_pool[cookie_index]
+    if not pool.has_active():
+        raise RecoverableInstagramPause('All Instagram cookie sessions are burnt')
+
+    tried: set[str] = set()
+    cookie_file = pool.next(current_file)
+
+    while cookie_file:
+        k = str(cookie_file)
+        if k in tried:
+            break
+        tried.add(k)
         try:
             session, csrf, profile = _open_profile_session(username, cookie_file=cookie_file, worker_id=worker_name)
             logging.info(
                 '[InstagramScraper] [%s] Cookie %s ready during %s - page_name=%s user_id=%s',
-                job_id,
-                _cookie_label(cookie_file),
-                reason,
-                profile['page_name'],
-                profile['user_id'],
+                job_id, _cookie_label(cookie_file), reason,
+                profile['page_name'], profile['user_id'],
             )
-            return cookie_index, session, csrf, profile, cookie_file
+            return session, csrf, profile, cookie_file
         except Exception as exc:
             last_error = str(exc)
             logging.warning(
                 '[InstagramScraper] [%s] Cookie %s unusable during %s: %s',
-                job_id,
-                _cookie_label(cookie_file),
-                reason,
-                exc,
+                job_id, _cookie_label(cookie_file), reason, exc,
             )
+            pool.classify_and_mark(cookie_file, exc)
+            cookie_file = pool.next(cookie_file)
+
+    waited_file = pool.wait_for_available(
+        job_id,
+        control_check=lambda: bool(apply_job_control_action(job_id, 'scraping', worker_token=worker_token)),
+    )
+    if waited_file:
+        try:
+            session, csrf, profile = _open_profile_session(username, cookie_file=waited_file, worker_id=worker_name)
+            logging.info(
+                '[InstagramScraper] [%s] Cookie %s ready after cooldown during %s',
+                job_id, _cookie_label(waited_file), reason,
+            )
+            return session, csrf, profile, waited_file
+        except Exception as exc:
+            last_error = str(exc)
+            pool.classify_and_mark(waited_file, exc)
+
     raise RecoverableInstagramPause(
-        f'All assigned Instagram sessions were exhausted during {reason}. Last error: {last_error or "unknown"}'
+        f'All Instagram sessions exhausted during {reason}. Last error: {last_error or "unknown"}'
     )
 
 
@@ -343,6 +324,61 @@ def parse_item(item: dict) -> dict:
     }
 
 
+def _fetch_with_rotation(session, profile, csrf, username, max_id, cookie_file,
+                         pool: CookiePool, job_id, page_num, worker_name, worker_token):
+    """Try to fetch a page. On failure, rotate cookies via the pool.
+
+    Returns (data, elapsed_ms, session, csrf, profile, username, cookie_file)
+    or raises RecoverableInstagramPause if no cookies are available.
+    """
+    max_attempts = pool.active_count() + 1
+    for attempt in range(1, max_attempts + 1):
+        action = apply_job_control_action(job_id, 'scraping', worker_token=worker_token)
+        if action:
+            return None, 0, session, csrf, profile, username, cookie_file
+
+        try:
+            t0 = time.time()
+            data = fetch_page(session, profile['user_id'], csrf, username, max_id)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return data, elapsed_ms, session, csrf, profile, username, cookie_file
+        except Exception as exc:
+            if not _is_burnt_cookie_error(exc) and not _is_throttle_error(exc):
+                raise
+
+            verdict = pool.classify_and_mark(cookie_file, exc)
+            logging.warning(
+                '[InstagramScraper] [%s] Cookie %s %s at page %s (attempt %s): %s',
+                job_id, _cookie_label(cookie_file), verdict, page_num, attempt, exc,
+            )
+
+            rotate_scrape_proxy(worker_name or job_id)
+            next_cookie = pool.next(cookie_file)
+
+            if not next_cookie:
+                next_cookie = pool.wait_for_available(
+                    job_id,
+                    control_check=lambda: bool(apply_job_control_action(job_id, 'scraping', worker_token=worker_token)),
+                )
+                if not next_cookie:
+                    if not pool.has_active():
+                        raise RecoverableInstagramPause(
+                            f'All Instagram cookies are burnt at page {page_num}'
+                        )
+                    raise RecoverableInstagramPause(
+                        f'All cookies exhausted at page {page_num}. Last error: {exc}'
+                    )
+
+            session, csrf, profile, cookie_file = _open_cookie_context(
+                pool, cookie_file, username, job_id,
+                f'rotation at page {page_num}',
+                worker_name=worker_name, worker_token=worker_token,
+            )
+            username = profile['username']
+
+    raise RecoverableInstagramPause(f'Could not fetch page {page_num} after {max_attempts} attempts')
+
+
 def run_instagram_scraper(job: dict, worker_name: str = None):
     job_id = job['job_id']
     account_url = job['facebook_url']
@@ -360,18 +396,31 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
     stale_pages = 0
     last_productive_max_id = max_id
     normalized_url, username = _normalize_instagram_account_url(account_url)
-    cookie_pool = _worker_cookie_pool(worker_name)
-    cookie_index = 0
+
+    cookie_files = _worker_cookie_pool(worker_name)
+    pool = CookiePool(
+        cookie_files,
+        is_burnt_fn=_is_burnt_cookie_error,
+        is_throttle_fn=_is_throttle_error,
+        throttle_cooldown=THROTTLE_COOLDOWN,
+    )
     cookie_file = None
     session = None
     csrf = None
     profile = None
+    pages_on_current_cookie = 0
 
-    logging.info('[InstagramScraper] [%s] Starting - url=%s worker=%s resume_page=%s cookies=%s', job_id, account_url, worker_name or 'n/a', page_num, [_cookie_label(p) for p in cookie_pool])
+    logging.info(
+        '[InstagramScraper] [%s] Starting - url=%s worker=%s resume_page=%s cookies=%d',
+        job_id, account_url, worker_name or 'n/a', page_num, pool.total_count(),
+    )
 
     try:
         update_job_status(job_id, 'scraping')
-        cookie_index, session, csrf, profile, cookie_file = _open_cookie_context(cookie_pool, 0, username, job_id, 'initial session', worker_name=worker_name)
+        session, csrf, profile, cookie_file = _open_cookie_context(
+            pool, None, username, job_id, 'initial session',
+            worker_name=worker_name, worker_token=worker_token,
+        )
         username = profile['username']
         update_job_progress(
             job_id,
@@ -385,7 +434,7 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
         while True:
             action = apply_job_control_action(job_id, 'scraping', worker_token=worker_token)
             if action:
-                logging.info('[InstagramScraper] [%s] Control action applied before page fetch: %s', job_id, action)
+                logging.info('[InstagramScraper] [%s] Control action before page fetch: %s', job_id, action)
                 return
 
             if max_posts and total_saved >= int(max_posts):
@@ -393,51 +442,40 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
                 break
 
             page_num += 1
+            pages_on_current_cookie += 1
+
+            # --- proactive rotation ---
+            if pages_on_current_cookie > ROTATE_EVERY_PAGES and pool.active_count() > 1:
+                next_cookie = pool.next(cookie_file)
+                if next_cookie and next_cookie != cookie_file:
+                    logging.info(
+                        '[InstagramScraper] [%s] Proactive rotation at page %s: %s → %s',
+                        job_id, page_num, _cookie_label(cookie_file), _cookie_label(next_cookie),
+                    )
+                    rotate_scrape_proxy(worker_name or job_id)
+                    try:
+                        session, csrf, profile, cookie_file = _open_cookie_context(
+                            pool, cookie_file, username, job_id,
+                            f'proactive rotation at page {page_num}',
+                            worker_name=worker_name, worker_token=worker_token,
+                        )
+                        username = profile['username']
+                        pages_on_current_cookie = 0
+                    except RecoverableInstagramPause:
+                        logging.warning('[InstagramScraper] [%s] Proactive rotation failed, continuing with current cookie', job_id)
+
             if page_num > 1 and page_num % REST_EVERY == 0:
                 logging.info('[InstagramScraper] [%s] Resting %.1fs at page %s', job_id, REST_DURATION, page_num)
                 time.sleep(REST_DURATION)
 
-            data = None
-            elapsed_ms = 0
-            max_rounds = 3
-            for _round in range(max_rounds):
-                for attempt in range(1, FETCH_RETRY_ATTEMPTS + 1):
-                    action = apply_job_control_action(job_id, 'scraping', worker_token=worker_token)
-                    if action:
-                        logging.info('[InstagramScraper] [%s] Control action during retry: %s', job_id, action)
-                        return
-                    try:
-                        t0 = time.time()
-                        data = fetch_page(session, profile['user_id'], csrf, username, max_id)
-                        elapsed_ms = int((time.time() - t0) * 1000)
-                        break
-                    except Exception as exc:
-                        if not _is_retryable_fetch_error(exc):
-                            raise
-                        wait_seconds = FETCH_RETRY_DELAY * attempt
-                        logging.warning(
-                            '[InstagramScraper] [%s] Feed attempt %s/%s (round %s/%s) failed at page %s cookie=%s: %s — waiting %.1fs',
-                            job_id, attempt, FETCH_RETRY_ATTEMPTS, _round + 1, max_rounds,
-                            page_num, _cookie_label(cookie_file) if cookie_file else 'n/a',
-                            exc, wait_seconds,
-                        )
-                        time.sleep(wait_seconds)
-                        rotate_scrape_proxy(worker_name or job_id)
-                        cookie_index, session, csrf, profile, cookie_file = _open_cookie_context(
-                            cookie_pool, cookie_index + 1, username, job_id,
-                            f'feed retry page {page_num}', worker_name=worker_name,
-                        )
-                        username = profile['username']
-                if data is not None:
-                    break
-                cooldown = 30 * (_round + 1)
-                logging.warning(
-                    '[InstagramScraper] [%s] All %s cookies failed on round %s/%s at page %s — cooling down %ss before retrying',
-                    job_id, FETCH_RETRY_ATTEMPTS, _round + 1, max_rounds, page_num, cooldown,
-                )
-                time.sleep(cooldown)
+            # --- fetch with automatic rotation on error ---
+            result = _fetch_with_rotation(
+                session, profile, csrf, username, max_id, cookie_file,
+                pool, job_id, page_num, worker_name, worker_token,
+            )
+            data, elapsed_ms, session, csrf, profile, username, cookie_file = result
             if data is None:
-                raise RecoverableInstagramPause(f'Instagram feed could not continue at page {page_num} after {max_rounds} full rounds')
+                return
 
             items = data.get('items') or []
             more_available = bool(data.get('more_available'))
@@ -445,12 +483,17 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
             posts = [parse_item(item) for item in items]
             page_saved = 0
 
-            logging.info('[InstagramScraper] [%s] page=%s items=%s more=%s next_max_id=%s %sms cookie=%s', job_id, page_num, len(items), more_available, bool(next_max_id), elapsed_ms, _cookie_label(cookie_file) if cookie_file else 'n/a')
+            logging.info(
+                '[InstagramScraper] [%s] page=%s items=%s more=%s next_max_id=%s %sms cookie=%s active=%s/%s',
+                job_id, page_num, len(items), more_available, bool(next_max_id),
+                elapsed_ms, _cookie_label(cookie_file) if cookie_file else 'n/a',
+                pool.active_count(), pool.total_count(),
+            )
 
             for post in posts:
                 action = apply_job_control_action(job_id, 'scraping', worker_token=worker_token)
                 if action:
-                    logging.info('[InstagramScraper] [%s] Control action applied during page processing: %s', job_id, action)
+                    logging.info('[InstagramScraper] [%s] Control action during page processing: %s', job_id, action)
                     return
 
                 timestamp = post.get('published_timestamp')
@@ -489,21 +532,21 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
                 stop_reason = 'stale_pages_reached'
                 break
 
-            if not items and total_saved == 0 and len(cookie_pool) > 1 and (cookie_index + 1) < len(cookie_pool):
+            if not items and total_saved == 0 and pool.active_count() > 1:
                 logging.warning(
                     '[InstagramScraper] [%s] Empty feed with 0 posts on cookie %s — trying next cookie',
                     job_id, _cookie_label(cookie_file) if cookie_file else 'n/a',
                 )
                 rotate_scrape_proxy(worker_name or job_id)
-                cookie_index, session, csrf, profile, cookie_file = _open_cookie_context(
-                    cookie_pool,
-                    cookie_index + 1,
-                    username,
-                    job_id,
-                    'empty feed retry',
-                    worker_name=worker_name,
-                )
-                username = profile['username']
+                try:
+                    session, csrf, profile, cookie_file = _open_cookie_context(
+                        pool, cookie_file, username, job_id, 'empty feed retry',
+                        worker_name=worker_name, worker_token=worker_token,
+                    )
+                    username = profile['username']
+                    pages_on_current_cookie = 0
+                except RecoverableInstagramPause:
+                    pass
                 page_num -= 1
                 continue
 
@@ -516,10 +559,14 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
 
         action = apply_job_control_action(job_id, 'scraping', worker_token=worker_token)
         if action:
-            logging.info('[InstagramScraper] [%s] Control action applied at completion boundary: %s', job_id, action)
+            logging.info('[InstagramScraper] [%s] Control action at completion boundary: %s', job_id, action)
             return
 
-        logging.info('[InstagramScraper] [%s] Done - %s posts saved stop_reason=%s url=%s', job_id, total_saved, stop_reason or 'feed_exhausted', normalized_url)
+        logging.info(
+            '[InstagramScraper] [%s] Done - %s posts saved stop_reason=%s url=%s cookies_remaining=%s/%s',
+            job_id, total_saved, stop_reason or 'feed_exhausted', normalized_url,
+            pool.active_count(), pool.total_count(),
+        )
         update_job_status(job_id, 'downloading_content', clear_scrape_checkpoint=True)
 
     except RecoverableInstagramPause as exc:

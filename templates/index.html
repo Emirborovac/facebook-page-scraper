@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Facebook Scraper — Dashboard</title>
+  <title>Social Media Ultimate Scraper — Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -11,9 +11,9 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --blue:    #1877F2;
-      --blue-dk: #0d5dcc;
-      --blue-lt: #e8f0fe;
+      --pink:    #EC4899;
+      --pink-dk: #BE185D;
+      --pink-lt: #FCE7F3;
       --black:   #0a0a0a;
       --white:   #ffffff;
       --bg:      #f7f8fa;
@@ -54,7 +54,7 @@
     .nav-logo {
       width: 32px;
       height: 32px;
-      background: var(--blue);
+      background: var(--pink);
       border-radius: 50%;
       display: flex;
       align-items: center;
@@ -284,8 +284,8 @@
     .tab-btn:hover { color: var(--text); }
 
     .tab-btn.active {
-      color: var(--blue);
-      border-bottom-color: var(--blue);
+      color: var(--pink);
+      border-bottom-color: var(--pink);
       font-weight: 600;
     }
 
@@ -299,8 +299,8 @@
       border-radius: 9px;
       font-size: 10px;
       font-weight: 700;
-      background: var(--blue-lt);
-      color: var(--blue);
+      background: var(--pink-lt);
+      color: var(--pink);
     }
 
     /* ── CONTENT ─────────────────────────────────────────────────── */
@@ -374,7 +374,7 @@
       transition: border-color 0.15s;
     }
 
-    .form-input:focus { border-color: var(--blue); }
+    .form-input:focus { border-color: var(--pink); }
 
     .form-cols {
       display: grid;
@@ -395,7 +395,7 @@
     .btn-primary {
       height: 44px;
       padding: 0 28px;
-      background: var(--blue);
+      background: var(--pink);
       color: var(--white);
       border: none;
       border-radius: 2px;
@@ -410,7 +410,7 @@
       gap: 8px;
     }
 
-    .btn-primary:hover { background: var(--blue-dk); }
+    .btn-primary:hover { background: var(--pink-dk); }
     .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .btn-secondary {
@@ -475,7 +475,7 @@
     }
 
     .refresh-indicator.refreshing {
-      background: var(--blue);
+      background: var(--pink);
       animation: spin 0.6s linear infinite;
     }
 
@@ -549,7 +549,7 @@
     }
 
     .sort-btn.active .sort-icon {
-      color: var(--blue);
+      color: var(--pink);
     }
 
     td {
@@ -571,7 +571,7 @@
     }
 
     .url-cell a {
-      color: var(--blue);
+      color: var(--pink);
       text-decoration: none;
       font-weight: 500;
     }
@@ -601,9 +601,9 @@
     .badge-pending    { background: #f3f4f6; color: #6b7280; }
     .badge-pending .badge-dot { background: #9ca3af; }
 
-    .badge-scraping   { background: #eff6ff; color: #1877F2; }
+    .badge-scraping   { background: #FCE7F3; color: #EC4899; }
     .badge-scraping .badge-dot {
-      background: #1877F2;
+      background: #EC4899;
       animation: pulse 1.2s infinite;
     }
 
@@ -658,12 +658,12 @@
     }
 
     .btn-action.blue {
-      border-color: var(--blue);
-      color: var(--blue);
+      border-color: var(--pink);
+      color: var(--pink);
     }
 
     .btn-action.blue:hover {
-      background: var(--blue);
+      background: var(--pink);
       color: var(--white);
     }
 
@@ -727,7 +727,7 @@
       line-height: 1;
     }
 
-    .stat-value.blue { color: var(--blue); }
+    .stat-value.blue { color: var(--pink); }
     .stat-value.green { color: #16a34a; }
     .stat-value.amber { color: #d97706; }
     .stat-value.red { color: #e11d48; }
@@ -774,7 +774,7 @@
 
     .progress-bar-fill {
       height: 100%;
-      background: var(--blue);
+      background: var(--pink);
       border-radius: 2px;
       transition: width 0.3s;
     }
@@ -911,7 +911,7 @@
       width: 20px;
       height: 20px;
       border: 2.5px solid var(--border);
-      border-top-color: var(--blue);
+      border-top-color: var(--pink);
       border-radius: 50%;
       animation: spin 0.7s linear infinite;
       margin: 0 auto;
@@ -924,11 +924,15 @@
 <nav>
   <a class="nav-brand" href="/dashboard">
     <div class="nav-logo">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-        <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" fill="#fff"/>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="18" cy="5" r="3"/>
+        <circle cx="6" cy="12" r="3"/>
+        <circle cx="18" cy="19" r="3"/>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
       </svg>
     </div>
-    <span class="nav-title">Facebook Scraper</span>
+    <span class="nav-title">Social Media Ultimate Scraper</span>
   </a>
   <div class="nav-right">
     <div class="nav-stats" id="nav-stats">
@@ -980,6 +984,7 @@
       System Online
     </div>
     <a class="nav-link-btn" href="/content">All Content</a>
+    <a class="nav-link-btn" href="/cookies">Cookies</a>
     <form method="POST" action="/logout" style="margin:0">
       <button type="submit" class="logout-btn">Sign Out</button>
     </form>

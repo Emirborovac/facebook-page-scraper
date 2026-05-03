@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import py_compile; py_compile.compile\\('models/instagram_scraper.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

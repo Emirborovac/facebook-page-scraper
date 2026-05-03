@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cookies — Social Media Ultimate Scraper</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --pink: #EC4899;
+      --pink-dk: #BE185D;
+      --pink-lt: #FCE7F3;
+      --black: #0a0a0a;
+      --white: #ffffff;
+      --bg: #f7f8fa;
+      --border: #e2e4e9;
+      --text: #0d0d1a;
+      --muted: #6b6b80;
+      --green: #16a34a;
+      --green-bg: #f0fdf4;
+      --red: #dc2626;
+      --red-bg: #fef2f2;
+      --orange: #ea580c;
+      --orange-bg: #fff7ed;
+      --nav-h: 60px;
+      --card-r: 2px;
+    }
+    html, body { min-height: 100%; font-family: 'Outfit', sans-serif; background: var(--bg); color: var(--text); }
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--nav-h);
+      background: var(--black); display: flex; align-items: center; justify-content: space-between;
+      padding: 0 32px; z-index: 100; border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .nav-left { display: flex; align-items: center; gap: 16px; }
+    .back-btn { display: flex; align-items: center; gap: 6px; color: rgba(255,255,255,0.6); text-decoration: none; font-size: 13px; font-weight: 500; transition: color 0.15s; }
+    .back-btn:hover { color: var(--white); }
+    .nav-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.12); }
+    .nav-page-info { display: flex; align-items: center; gap: 10px; }
+    .nav-logo { width: 28px; height: 28px; background: var(--pink); border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .nav-page-name { font-size: 14px; font-weight: 600; color: var(--white); }
+    .layout { padding-top: var(--nav-h); }
+    .page-header { background: var(--white); border-bottom: 1px solid var(--border); padding: 20px 32px; }
+    .page-header-inner { max-width: 1440px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+    .page-meta h2 { font-size: 18px; font-weight: 700; color: var(--text); letter-spacing: -0.3px; }
+    .page-meta p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .platform-tabs { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 4px; position: sticky; top: var(--nav-h); z-index: 91; }
+    .platform-tab { height: 46px; padding: 0 22px; background: none; border: none; border-bottom: 2.5px solid transparent; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: all 0.15s; display: inline-flex; align-items: center; gap: 7px; }
+    .platform-tab:hover { color: var(--text); }
+    .platform-tab.active { color: var(--pink); border-bottom-color: var(--pink); font-weight: 600; }
+    .platform-tab .tab-count { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 18px; padding: 0 6px; border-radius: 9px; font-size: 10px; font-weight: 700; background: var(--bg); color: var(--muted); }
+    .platform-tab.active .tab-count { background: var(--pink-lt); color: var(--pink); }
+
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 24px 32px 64px; }
+
+    .upload-card {
+      background: var(--white); border: 1px solid var(--border); border-radius: var(--card-r);
+      padding: 20px 24px; margin-bottom: 24px;
+    }
+    .upload-title { font-size: 13px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 14px; }
+    .upload-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .upload-form select, .upload-form .file-label {
+      height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: 2px;
+      background: var(--white); font-family: 'Outfit', sans-serif; font-size: 13px; color: var(--text);
+      cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .upload-form select:focus { outline: none; border-color: var(--pink); }
+    .file-label { background: var(--bg); }
+    .file-label:hover { background: var(--pink-lt); border-color: var(--pink); color: var(--pink); }
+    .file-input { display: none; }
+    .file-name { font-size: 12px; color: var(--muted); margin-left: 4px; }
+    .btn-primary {
+      height: 36px; padding: 0 18px; background: var(--pink); border: none; border-radius: 2px;
+      color: var(--white); font-family: 'Outfit', sans-serif; font-size: 12px; font-weight: 600;
+      cursor: pointer; letter-spacing: 0.3px; text-transform: uppercase; transition: background 0.15s;
+    }
+    .btn-primary:hover { background: var(--pink-dk); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .upload-msg { width: 100%; font-size: 12px; margin-top: 4px; padding: 8px 10px; border-radius: 2px; display: none; }
+    .upload-msg.ok { background: var(--green-bg); color: var(--green); display: block; }
+    .upload-msg.err { background: var(--red-bg); color: var(--red); display: block; }
+
+    .platform-section { display: none; }
+    .platform-section.active { display: block; }
+
+    .worker-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px;
+    }
+    .worker-card {
+      background: var(--white); border: 1px solid var(--border); border-radius: var(--card-r);
+      padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .worker-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .worker-title { font-size: 14px; font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 8px; }
+    .worker-title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+    .worker-title .dot.zero { background: var(--red); }
+    .worker-stats { display: flex; gap: 14px; }
+    .stat { display: flex; flex-direction: column; align-items: flex-end; }
+    .stat-value { font-size: 16px; font-weight: 700; color: var(--text); line-height: 1; letter-spacing: -0.3px; }
+    .stat-value.green { color: var(--green); }
+    .stat-value.red { color: var(--red); }
+    .stat-label { font-size: 9px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.7px; margin-top: 3px; }
+
+    .cookie-list { display: flex; flex-direction: column; gap: 6px; }
+    .cookie-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 7px 10px; background: var(--bg); border-radius: 2px; font-size: 12px;
+    }
+    .cookie-row.trash { background: var(--orange-bg); }
+    .cookie-name { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cookie-meta { font-size: 10px; color: var(--muted); }
+    .cookie-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .icon-btn {
+      width: 24px; height: 24px; border: none; background: transparent; border-radius: 2px;
+      cursor: pointer; color: var(--muted); display: inline-flex; align-items: center; justify-content: center;
+      transition: all 0.15s;
+    }
+    .icon-btn:hover { background: var(--white); color: var(--text); }
+    .icon-btn.danger:hover { background: var(--red-bg); color: var(--red); }
+    .icon-btn.success:hover { background: var(--green-bg); color: var(--green); }
+
+    .empty { font-size: 11px; color: var(--muted); padding: 6px 10px; font-style: italic; text-align: center; }
+
+    .section-head {
+      display: flex; align-items: center; gap: 10px; margin: 28px 0 12px;
+      font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px;
+    }
+    .section-head .line { flex: 1; height: 1px; background: var(--border); }
+    .section-badge { padding: 2px 8px; border-radius: 9px; background: var(--white); border: 1px solid var(--border); font-size: 10px; }
+
+    @media (max-width: 720px) {
+      nav, .page-header, .platform-tabs, .wrap { padding-left: 16px; padding-right: 16px; }
+      .worker-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-left">
+    <a href="/dashboard" class="back-btn">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12,19 5,12 12,5"/></svg>
+      Back to Dashboard
+    </a>
+    <div class="nav-divider"></div>
+    <div class="nav-page-info">
+      <div class="nav-logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M21 11V7a2 2 0 0 0-2-2h-4l-2-3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/><circle cx="17" cy="17" r="4"/><path d="M17 14v6"/><path d="M14 17h6"/></svg></div>
+      <span class="nav-page-name">Cookie Management</span>
+    </div>
+  </div>
+  <div class="nav-right">
+    <button class="btn-export" id="refresh-btn" style="height:34px;padding:0 16px;background:transparent;border:1px solid rgba(255,255,255,0.2);border-radius:2px;color:rgba(255,255,255,0.7);font-family:'Outfit',sans-serif;font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:7px;">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      Refresh
+    </button>
+  </div>
+</nav>
+
+<div class="layout">
+  <div class="page-header">
+    <div class="page-header-inner">
+      <div class="page-meta">
+        <h2>Cookie Management</h2>
+        <p>Upload and distribute scraping cookies across worker folders. Burnt cookies are auto-trashed; restore them here if needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="platform-tabs" id="platform-tabs"></div>
+
+  <div class="wrap">
+    <div class="upload-card">
+      <div class="upload-title">Upload Cookies</div>
+      <form class="upload-form" id="upload-form">
+        <select name="platform" id="upload-platform" required></select>
+        <select name="location" id="upload-location" required></select>
+        <label class="file-label" for="file-input">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Choose .txt files
+        </label>
+        <input type="file" id="file-input" class="file-input" multiple accept=".txt" />
+        <span class="file-name" id="file-name">No files selected</span>
+        <button type="submit" class="btn-primary" id="upload-submit" disabled>Upload</button>
+        <div class="upload-msg" id="upload-msg"></div>
+      </form>
+    </div>
+
+    <div id="platforms-container"></div>
+  </div>
+</div>
+
+<script>
+  const state = {
+    inventory: null,
+    activePlatform: null,
+  };
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+    return (n/1024/1024).toFixed(1) + ' MB';
+  }
+
+  async function fetchInventory() {
+    const res = await fetch('/api/cookies/inventory');
+    if (!res.ok) throw new Error('Failed to load inventory');
+    return await res.json();
+  }
+
+  function renderTabs() {
+    const container = document.getElementById('platform-tabs');
+    container.innerHTML = state.inventory.platforms.map(p => {
+      const total = p.workers.reduce((sum, w) => sum + w.cookie_count, 0) + p.shared_count;
+      const isActive = p.id === state.activePlatform;
+      return `<button class="platform-tab ${isActive ? 'active' : ''}" data-platform="${p.id}">
+        ${escapeHtml(p.label)}
+        <span class="tab-count">${total}</span>
+      </button>`;
+    }).join('');
+    container.querySelectorAll('.platform-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.activePlatform = btn.dataset.platform;
+        renderTabs();
+        renderPlatformSection();
+        syncUploadForm();
+      });
+    });
+  }
+
+  function workerCardHtml(platformId, worker) {
+    const dotClass = worker.cookie_count === 0 ? 'dot zero' : 'dot';
+    const cookies = worker.cookies.length === 0
+      ? '<div class="empty">No cookies — burn rate will pause this worker</div>'
+      : worker.cookies.map(c => `
+        <div class="cookie-row">
+          <div style="overflow:hidden;flex:1">
+            <div class="cookie-name">${escapeHtml(c.name)}</div>
+            <div class="cookie-meta">${fmtBytes(c.size)}</div>
+          </div>
+          <div class="cookie-actions">
+            <button class="icon-btn" title="Move" data-action="move" data-platform="${platformId}" data-source="${worker.name}" data-file="${escapeHtml(c.name)}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platformId}" data-location="${worker.name}" data-file="${escapeHtml(c.name)}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+    const trash = worker.trash.length === 0
+      ? ''
+      : `<div style="margin-top:6px;padding-top:8px;border-top:1px dashed var(--border)">
+          <div style="font-size:10px;font-weight:700;color:var(--orange);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px">Burnt (${worker.trash_count})</div>
+          ${worker.trash.map(c => `
+            <div class="cookie-row trash">
+              <div style="overflow:hidden;flex:1">
+                <div class="cookie-name">${escapeHtml(c.name)}</div>
+                <div class="cookie-meta">${fmtBytes(c.size)}</div>
+              </div>
+              <div class="cookie-actions">
+                <button class="icon-btn success" title="Restore" data-action="restore" data-platform="${platformId}" data-source="${worker.name}/cookie_trash" data-file="${escapeHtml(c.name)}">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                </button>
+                <button class="icon-btn danger" title="Delete forever" data-action="delete" data-platform="${platformId}" data-location="${worker.name}/cookie_trash" data-file="${escapeHtml(c.name)}">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>`;
+
+    return `
+      <div class="worker-card">
+        <div class="worker-head">
+          <div class="worker-title"><span class="${dotClass}"></span>${escapeHtml(worker.name)}</div>
+          <div class="worker-stats">
+            <div class="stat"><span class="stat-value ${worker.cookie_count === 0 ? 'red' : 'green'}">${worker.cookie_count}</span><span class="stat-label">Active</span></div>
+            <div class="stat"><span class="stat-value">${worker.trash_count}</span><span class="stat-label">Burnt</span></div>
+          </div>
+        </div>
+        <div class="cookie-list">${cookies}</div>
+        ${trash}
+      </div>`;
+  }
+
+  function renderPlatformSection() {
+    const container = document.getElementById('platforms-container');
+    const platform = state.inventory.platforms.find(p => p.id === state.activePlatform);
+    if (!platform) { container.innerHTML = ''; return; }
+
+    const workersHtml = `<div class="worker-grid">${platform.workers.map(w => workerCardHtml(platform.id, w)).join('')}</div>`;
+
+    let extra = '';
+
+    // Download cookies — separate pool used by the media downloader.
+    extra += `<div class="section-head">Download Cookies <span class="section-badge">${platform.download_count}</span><div class="line"></div></div>`;
+    extra += `<div class="worker-grid"><div class="worker-card">
+      <div class="worker-head">
+        <div class="worker-title"><span class="dot ${platform.download_count === 0 ? 'zero' : ''}"></span>cookies/${escapeHtml(platform.id)}/download/</div>
+        <div class="worker-stats"><div class="stat"><span class="stat-value ${platform.download_count === 0 ? 'red' : 'green'}">${platform.download_count}</span><span class="stat-label">Downloader</span></div></div>
+      </div>
+      <div class="cookie-list">${platform.download_count === 0
+          ? '<div class="empty">No dedicated download cookies — falling back to worker pool. Upload some here to isolate downloads from scraping.</div>'
+          : platform.download_cookies.map(c => `
+              <div class="cookie-row">
+                <div style="overflow:hidden;flex:1"><div class="cookie-name">${escapeHtml(c.name)}</div><div class="cookie-meta">${fmtBytes(c.size)}</div></div>
+                <div class="cookie-actions">
+                  <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platform.id}" data-location="download" data-file="${escapeHtml(c.name)}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                  </button>
+                </div>
+              </div>`).join('')}
+      </div>
+    </div></div>`;
+
+    if (platform.shared_count > 0) {
+      extra += `<div class="section-head">Shared / Legacy <span class="section-badge">${platform.shared_count}</span><div class="line"></div></div>`;
+      extra += `<div class="worker-grid"><div class="worker-card">
+        <div class="worker-head">
+          <div class="worker-title">cookies/${escapeHtml(platform.id)}/</div>
+          <div class="worker-stats"><div class="stat"><span class="stat-value">${platform.shared_count}</span><span class="stat-label">Shared</span></div></div>
+        </div>
+        <div class="cookie-list">${platform.shared_cookies.map(c => `
+          <div class="cookie-row">
+            <div style="overflow:hidden;flex:1"><div class="cookie-name">${escapeHtml(c.name)}</div><div class="cookie-meta">${fmtBytes(c.size)}</div></div>
+            <div class="cookie-actions">
+              <button class="icon-btn" title="Move into a worker" data-action="move" data-platform="${platform.id}" data-source="shared" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platform.id}" data-location="shared" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/></svg>
+              </button>
+            </div>
+          </div>`).join('')}</div>
+      </div></div>`;
+    }
+
+    if (platform.trash_count > 0) {
+      extra += `<div class="section-head">Platform Trash <span class="section-badge">${platform.trash_count}</span><div class="line"></div></div>`;
+      extra += `<div class="worker-grid"><div class="worker-card">
+        <div class="worker-head">
+          <div class="worker-title">cookies/${escapeHtml(platform.id)}/cookie_trash/</div>
+        </div>
+        <div class="cookie-list">${platform.trash.map(c => `
+          <div class="cookie-row trash">
+            <div style="overflow:hidden;flex:1"><div class="cookie-name">${escapeHtml(c.name)}</div><div class="cookie-meta">${fmtBytes(c.size)}</div></div>
+            <div class="cookie-actions">
+              <button class="icon-btn success" title="Restore" data-action="restore" data-platform="${platform.id}" data-source="trash" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+              </button>
+              <button class="icon-btn danger" title="Delete forever" data-action="delete" data-platform="${platform.id}" data-location="trash" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/></svg>
+              </button>
+            </div>
+          </div>`).join('')}</div>
+      </div></div>`;
+    }
+
+    container.innerHTML = workersHtml + extra;
+
+    container.querySelectorAll('button[data-action]').forEach(btn => {
+      btn.addEventListener('click', () => handleAction(btn.dataset));
+    });
+  }
+
+  async function handleAction(d) {
+    const platform = d.platform;
+    const file = d.file;
+
+    if (d.action === 'delete') {
+      if (!confirm(`Delete ${file}?`)) return;
+      const url = `/api/cookies/${encodeURIComponent(platform)}/${encodeURIComponent(d.location)}/${encodeURIComponent(file)}`;
+      const res = await fetch(url, { method: 'DELETE' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Delete failed: ' + (err.detail || res.status));
+      }
+    } else if (d.action === 'restore') {
+      const platformInfo = state.inventory.platforms.find(p => p.id === platform);
+      const target = prompt(`Restore ${file} to which worker? (1-${platformInfo.worker_count})`, '1');
+      if (!target) return;
+      const fd = new FormData();
+      fd.append('platform', platform);
+      fd.append('source_location', d.source);
+      fd.append('filename', file);
+      fd.append('target_worker', target);
+      const res = await fetch('/api/cookies/restore', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Restore failed: ' + (err.detail || res.status));
+      }
+    } else if (d.action === 'move') {
+      const platformInfo = state.inventory.platforms.find(p => p.id === platform);
+      const target = prompt(`Move ${file} to which worker? (1-${platformInfo.worker_count})`, '1');
+      if (!target) return;
+      const fd = new FormData();
+      fd.append('platform', platform);
+      fd.append('source_location', d.source);
+      fd.append('dest_location', `worker_${parseInt(target)}`);
+      fd.append('filename', file);
+      const res = await fetch('/api/cookies/move', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Move failed: ' + (err.detail || res.status));
+      }
+    }
+    await refresh();
+  }
+
+  function syncUploadForm() {
+    const platformSel = document.getElementById('upload-platform');
+    const locationSel = document.getElementById('upload-location');
+    platformSel.innerHTML = state.inventory.platforms.map(p =>
+      `<option value="${p.id}" ${p.id === state.activePlatform ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('');
+
+    function updateLocations() {
+      const platform = state.inventory.platforms.find(p => p.id === platformSel.value);
+      if (!platform) { locationSel.innerHTML = ''; return; }
+      const opts = ['<option value="auto">Auto-distribute across workers</option>'];
+      for (let i = 1; i <= platform.worker_count; i++) {
+        opts.push(`<option value="worker_${i}">worker_${i}</option>`);
+      }
+      opts.push('<option value="download">Download pool (downloader only)</option>');
+      opts.push('<option value="shared">Shared (legacy)</option>');
+      locationSel.innerHTML = opts.join('');
+    }
+    platformSel.addEventListener('change', updateLocations);
+    updateLocations();
+  }
+
+  function setupUpload() {
+    const fileInput = document.getElementById('file-input');
+    const fileName = document.getElementById('file-name');
+    const submit = document.getElementById('upload-submit');
+    const msg = document.getElementById('upload-msg');
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length === 0) {
+        fileName.textContent = 'No files selected';
+        submit.disabled = true;
+      } else if (fileInput.files.length === 1) {
+        fileName.textContent = fileInput.files[0].name;
+        submit.disabled = false;
+      } else {
+        fileName.textContent = `${fileInput.files.length} files`;
+        submit.disabled = false;
+      }
+    });
+
+    document.getElementById('upload-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.className = 'upload-msg';
+      msg.style.display = 'none';
+      const fd = new FormData();
+      fd.append('platform', document.getElementById('upload-platform').value);
+      fd.append('location', document.getElementById('upload-location').value);
+      for (const f of fileInput.files) fd.append('files', f);
+      submit.disabled = true;
+      submit.textContent = 'Uploading...';
+      try {
+        const res = await fetch('/api/cookies/upload', { method: 'POST', body: fd });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+        const errCount = (body.errors || []).length;
+        const okCount = (body.saved || []).length;
+        if (errCount > 0) {
+          msg.className = 'upload-msg err';
+          msg.textContent = `Saved ${okCount}, ${errCount} rejected: ` + body.errors.map(e => `${e.filename}: ${e.error}`).join('; ');
+        } else {
+          msg.className = 'upload-msg ok';
+          msg.textContent = `Uploaded ${okCount} cookie file${okCount === 1 ? '' : 's'} successfully.`;
+        }
+        fileInput.value = '';
+        fileName.textContent = 'No files selected';
+        await refresh();
+      } catch (err) {
+        msg.className = 'upload-msg err';
+        msg.textContent = 'Upload failed: ' + err.message;
+      } finally {
+        submit.disabled = false;
+        submit.textContent = 'Upload';
+      }
+    });
+  }
+
+  async function refresh() {
+    state.inventory = await fetchInventory();
+    if (!state.activePlatform || !state.inventory.platforms.some(p => p.id === state.activePlatform)) {
+      state.activePlatform = state.inventory.platforms[0]?.id || null;
+    }
+    renderTabs();
+    renderPlatformSection();
+    syncUploadForm();
+  }
+
+  document.getElementById('refresh-btn').addEventListener('click', refresh);
+  setupUpload();
+  refresh().catch(err => {
+    document.getElementById('platforms-container').innerHTML = `<div class="empty">Failed to load: ${escapeHtml(err.message)}</div>`;
+  });
+</script>
+
+</body>
+</html>

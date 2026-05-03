@@ -68,8 +68,14 @@ def _load_cookies_into_session(session: requests.Session, platform: str = 'faceb
     if cookie_file is not None:
         path = Path(cookie_file)
     else:
-        pool_dir = INSTAGRAM_COOKIE_DIR if platform == 'instagram' else FACEBOOK_COOKIE_DIR
-        path = pool_dir / "01.txt"
+        # No specific file requested — pick any available cookie from the download pool.
+        if platform == 'instagram':
+            picked = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
+        else:
+            picked = _next_facebook_cookie_file()
+        if picked is None:
+            return 0
+        path = Path(picked)
     if not path.exists():
         return 0
     if platform == 'instagram':
@@ -100,12 +106,38 @@ def _load_cookies_into_session(session: requests.Session, platform: str = 'faceb
 
 
 
-def _facebook_cookie_files() -> list[Path]:
-    if FACEBOOK_COOKIE_DIR.exists():
-        files = sorted([p for p in FACEBOOK_COOKIE_DIR.glob('*.txt') if p.is_file()])
+def _download_cookie_files(platform_dir: Path) -> list[Path]:
+    """Cookie files reserved for the downloader.
+
+    Preferred:  cookies/<platform>/download/*.txt   (dedicated, isolated from scraper cookies)
+    Fallback 1: any cookies/<platform>/worker_N/*.txt (borrows from scraper pool)
+    Fallback 2: cookies/<platform>/*.txt (legacy flat layout)
+
+    Subfolders named cookie_trash are always skipped.
+    """
+    download_dir = platform_dir / 'download'
+    if download_dir.is_dir():
+        files = sorted(p for p in download_dir.glob('*.txt') if p.is_file())
         if files:
             return files
+
+    if platform_dir.is_dir():
+        worker_files: list[Path] = []
+        for sub in sorted(platform_dir.iterdir()):
+            if sub.is_dir() and sub.name.startswith('worker_'):
+                worker_files.extend(sorted(p for p in sub.glob('*.txt') if p.is_file()))
+        if worker_files:
+            return worker_files
+
+        flat_files = sorted(p for p in platform_dir.glob('*.txt') if p.is_file())
+        if flat_files:
+            return flat_files
+
     return []
+
+
+def _facebook_cookie_files() -> list[Path]:
+    return _download_cookie_files(FACEBOOK_COOKIE_DIR)
 
 
 def _next_facebook_cookie_file() -> Path | None:
@@ -120,16 +152,14 @@ def _next_facebook_cookie_file() -> Path | None:
 
 
 def _instagram_cookie_files() -> list[Path]:
-    if INSTAGRAM_COOKIE_DIR.exists():
-        files = sorted([p for p in INSTAGRAM_COOKIE_DIR.glob('*.txt') if p.is_file()])
-        if files:
-            return files
-    return []
+    return _download_cookie_files(INSTAGRAM_COOKIE_DIR)
 
 
-def _next_instagram_cookie_file() -> Path:
+def _next_instagram_cookie_file() -> Path | None:
     global _IG_COOKIE_INDEX
     files = _instagram_cookie_files()
+    if not files:
+        return None
     with _IG_COOKIE_LOCK:
         path = files[_IG_COOKIE_INDEX % len(files)]
         _IG_COOKIE_INDEX = (_IG_COOKIE_INDEX + 1) % len(files)

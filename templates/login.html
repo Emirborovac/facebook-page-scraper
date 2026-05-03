@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Facebook Scraper — Login</title>
+  <title>Social Media Ultimate Scraper — Login</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
@@ -11,8 +11,8 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --blue:    #1877F2;
-      --blue-dk: #0d5dcc;
+      --pink:    #EC4899;
+      --pink-dk: #BE185D;
       --black:   #0a0a0a;
       --white:   #ffffff;
       --gray:    #f4f4f6;
@@ -38,8 +38,8 @@
       position: absolute;
       inset: 0;
       background-image:
-        linear-gradient(rgba(24,119,242,0.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(24,119,242,0.04) 1px, transparent 1px);
+        linear-gradient(rgba(236,72,153,0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(236,72,153,0.04) 1px, transparent 1px);
       background-size: 48px 48px;
       pointer-events: none;
     }
@@ -50,7 +50,7 @@
       width: 600px;
       height: 600px;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(24,119,242,0.08) 0%, transparent 70%);
+      background: radial-gradient(circle, rgba(236,72,153,0.10) 0%, transparent 70%);
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
@@ -69,7 +69,7 @@
     }
 
     .login-header {
-      background: var(--blue);
+      background: var(--pink);
       padding: 36px 40px 32px;
       display: flex;
       align-items: center;
@@ -139,12 +139,12 @@
       transition: border-color 0.15s;
     }
 
-    input:focus { border-color: var(--blue); }
+    input:focus { border-color: var(--pink); }
 
     .login-btn {
       width: 100%;
       height: 46px;
-      background: var(--blue);
+      background: var(--pink);
       color: var(--white);
       border: none;
       border-radius: 2px;
@@ -157,7 +157,7 @@
       transition: background 0.15s;
     }
 
-    .login-btn:hover { background: var(--blue-dk); }
+    .login-btn:hover { background: var(--pink-dk); }
 
     .login-error {
       color: #d93025;
@@ -184,12 +184,16 @@
   <div class="login-card">
     <div class="login-header">
       <div class="login-logo">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-          <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" fill="#1877F2"/>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#EC4899" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="18" cy="5" r="3"/>
+          <circle cx="6" cy="12" r="3"/>
+          <circle cx="18" cy="19" r="3"/>
+          <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+          <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
         </svg>
       </div>
       <div class="login-header-text">
-        <h1>Facebook Scraper</h1>
+        <h1>Social Media Ultimate Scraper</h1>
         <p>Secure Access Portal</p>
       </div>
     </div>

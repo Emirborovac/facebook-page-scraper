@@ -25,6 +25,7 @@ from models.operations import (
     update_job_scrape_checkpoint,
     update_job_status,
 )
+from models.cookie_pool import CookiePool, load_worker_cookie_pool
 from models.instagram_scraper import run_instagram_scraper
 from models.proxy import apply_scrape_proxy, rotate_scrape_proxy
 from models.tiktok_scraper import run_tiktok_scraper
@@ -32,7 +33,7 @@ from models.tiktok_scraper import run_tiktok_scraper
 load_dotenv()
 
 FACEBOOK_COOKIE_DIR = Path(os.getenv("FACEBOOK_COOKIE_DIR", "./cookies/facebook"))
-FACEBOOK_SCRAPING_WORKER_COUNT = max(1, int(os.getenv("FACEBOOK_SCRAPING_WORKER_COUNT", "6")))
+FACEBOOK_SCRAPING_WORKER_COUNT = max(1, int(os.getenv("FACEBOOK_SCRAPING_WORKER_COUNT", "5")))
 
 # Facebook internal query ID for the scroll-triggered pagination query.
 # This ID is embedded in Facebook's JS bundle and may change after major deploys.
@@ -46,6 +47,8 @@ GOOD_CHECKPOINT_HISTORY_LIMIT = 20
 REBOOTSTRAP_EVERY = int(os.getenv("FACEBOOK_REBOOTSTRAP_EVERY", "150"))
 REST_EVERY = int(os.getenv("FACEBOOK_REST_EVERY", "100"))
 REST_DURATION = float(os.getenv("FACEBOOK_REST_DURATION", "20"))
+ROTATE_EVERY_PAGES = max(int(os.getenv("FACEBOOK_ROTATE_EVERY_PAGES", "20")), 1)
+THROTTLE_COOLDOWN = float(os.getenv("FACEBOOK_THROTTLE_COOLDOWN", "300"))
 
 GET_HEADERS = {
     "User-Agent": (
@@ -101,87 +104,113 @@ def _cookie_label(cookie_file) -> str:
     return Path(cookie_file).name
 
 
-def _numeric_sort_key(path: Path):
-    stem = path.stem
-    return (0, int(stem)) if stem.isdigit() else (1, stem)
+def _is_throttle_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        'status=429' in message
+        or 'status=503' in message
+        or 'too many requests' in message
+        or 'try again later' in message
+    )
+
+
+def _is_burnt_cookie_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        'could not extract userid' in message
+        or 'no facebook cookies loaded' in message
+        or 'checkpoint' in message
+        or 'login_required' in message
+        or 'status=401' in message
+        or 'status=403' in message
+        or 'this content isn' in message  # "this content isn't available right now"
+    )
 
 
 def _worker_cookie_pool(worker_name: str = None) -> list[Path]:
-    worker_num = 1
-    if worker_name:
-        match = re.search(r"(\d+)$", worker_name)
-        if match:
-            worker_num = max(int(match.group(1)), 1)
-
-    if FACEBOOK_COOKIE_DIR.exists():
-        files = [p for p in FACEBOOK_COOKIE_DIR.glob('*.txt') if p.is_file()]
-        files.sort(key=_numeric_sort_key)
-        if files:
-            primary_count = min(FACEBOOK_SCRAPING_WORKER_COUNT, len(files))
-            primaries = files[:primary_count]
-            reserves = files[primary_count:]
-            primary = primaries[(worker_num - 1) % len(primaries)]
-            ordered = [primary]
-            if reserves:
-                reserve_offset = (worker_num - 1) % len(reserves)
-                ordered.extend(reserves[reserve_offset:] + reserves[:reserve_offset])
-            for path in primaries:
-                if path != primary:
-                    ordered.append(path)
-            deduped = []
-            seen = set()
-            for path in ordered:
-                key = str(path)
-                if key in seen:
-                    continue
-                seen.add(key)
-                deduped.append(path)
-            return deduped
-
-    logging.warning("[Scraper] No Facebook cookie files found in %s", FACEBOOK_COOKIE_DIR)
-    return []
+    return load_worker_cookie_pool(FACEBOOK_COOKIE_DIR, worker_name)
 
 
-def _open_cookie_context(cookie_pool: list, start_index: int, target_page: str, job_id: str, reason: str, worker_name: str = None):
-    if not cookie_pool:
-        raise RecoverableScrapePause("No cookie files are configured for this worker")
+def _open_one_session(cookie_file: Path, target_page: str, worker_name: str | None):
+    """Open a single FB session with the given cookie. Raises on failure."""
+    session = requests.Session()
+    apply_scrape_proxy(session, worker_id=worker_name)
+    try:
+        n_cookies = load_cookies(session, cookie_file)
+        if n_cookies == 0:
+            raise RuntimeError(f"No Facebook cookies loaded from {_cookie_label(cookie_file)}")
+
+        resp = session.get(target_page, headers=GET_HEADERS, timeout=30)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Page GET failed with {_cookie_label(cookie_file)}: status={resp.status_code}"
+            )
+
+        bootstrap = extract_bootstrap(resp.text)
+        if not bootstrap.get("user_id"):
+            raise RuntimeError(
+                f"Could not extract userID from page HTML using {_cookie_label(cookie_file)}"
+            )
+        return session, bootstrap
+    except Exception:
+        session.close()
+        raise
+
+
+def _open_cookie_context(
+    pool: CookiePool,
+    current_file: Path | None,
+    target_page: str,
+    job_id: str,
+    reason: str,
+    worker_name: str = None,
+    worker_token: str = None,
+):
+    """Round-robin through pool until a working cookie opens. Marks failures."""
+    if not pool.has_active():
+        raise RecoverableScrapePause("All Facebook cookie sessions are burnt")
 
     last_error = None
-    for cookie_index in range(max(int(start_index or 0), 0), len(cookie_pool)):
-        cookie_file = cookie_pool[cookie_index]
-        session = requests.Session()
-        apply_scrape_proxy(session, worker_id=worker_name)
+    tried: set[str] = set()
+    cookie_file = pool.next(current_file)
+
+    while cookie_file:
+        k = str(cookie_file)
+        if k in tried:
+            break
+        tried.add(k)
         try:
-            n_cookies = load_cookies(session, cookie_file)
-            if n_cookies == 0:
-                raise RuntimeError(f"No Facebook cookies loaded from {_cookie_label(cookie_file)}")
-
-            resp = session.get(target_page, headers=GET_HEADERS, timeout=30)
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"Page GET failed with {_cookie_label(cookie_file)}: status={resp.status_code}"
-                )
-
-            bootstrap = extract_bootstrap(resp.text)
-            if not bootstrap.get("user_id"):
-                raise RuntimeError(
-                    f"Could not extract userID from page HTML using {_cookie_label(cookie_file)}"
-                )
-
+            session, bootstrap = _open_one_session(cookie_file, target_page, worker_name)
             logging.info(
-                f"[Scraper] [{job_id}] Cookie {_cookie_label(cookie_file)} ready — "
+                f"[Scraper] [{job_id}] Cookie {_cookie_label(cookie_file)} ready during {reason} — "
                 f"query_id={bootstrap.get('query_id')} user_id={bootstrap.get('user_id')}"
             )
-            return cookie_index, session, bootstrap, cookie_file
+            return session, bootstrap, cookie_file
         except Exception as exc:
-            session.close()
             last_error = str(exc)
             logging.warning(
                 f"[Scraper] [{job_id}] Cookie {_cookie_label(cookie_file)} unusable during {reason}: {exc}"
             )
+            pool.classify_and_mark(cookie_file, exc)
+            cookie_file = pool.next(cookie_file)
+
+    waited_file = pool.wait_for_available(
+        job_id,
+        control_check=lambda: bool(apply_job_control_action(job_id, 'scraping', worker_token=worker_token)),
+    )
+    if waited_file:
+        try:
+            session, bootstrap = _open_one_session(waited_file, target_page, worker_name)
+            logging.info(
+                f"[Scraper] [{job_id}] Cookie {_cookie_label(waited_file)} ready after cooldown during {reason}"
+            )
+            return session, bootstrap, waited_file
+        except Exception as exc:
+            last_error = str(exc)
+            pool.classify_and_mark(waited_file, exc)
 
     raise RecoverableScrapePause(
-        f"All assigned cookies were exhausted during {reason}. Last error: {last_error or 'unknown'}"
+        f"All assigned cookies exhausted during {reason}. Last error: {last_error or 'unknown'}"
     )
 
 
@@ -734,26 +763,33 @@ def run_scraper(job: dict, worker_name: str = None):
     skip_posts_for_page = int(job.get("scrape_resume_skip_posts") or 0) if exact_resume else 0
     good_checkpoints = _load_good_checkpoints(job.get("scrape_good_checkpoints"))
     worker_token = job.get("active_worker_token")
-    cookie_pool = _worker_cookie_pool(worker_name)
-    cookie_index = 0
+    cookie_files = _worker_cookie_pool(worker_name)
+    pool = CookiePool(
+        cookie_files,
+        is_burnt_fn=_is_burnt_cookie_error,
+        is_throttle_fn=_is_throttle_error,
+        throttle_cooldown=THROTTLE_COOLDOWN,
+    )
     cookie_file = None
     session = None
+    pages_on_current_cookie = 0
 
     logging.info(
         f"[Scraper] [{job_id}] Starting — url={source_page} scrape_url={target_page} "
-        f"worker={worker_name or 'n/a'} cookies={[_cookie_label(path) for path in cookie_pool]}"
+        f"worker={worker_name or 'n/a'} cookies={pool.total_count()}"
     )
 
     try:
         update_job_status(job_id, "scraping")
 
-        cookie_index, session, bootstrap, cookie_file = _open_cookie_context(
-            cookie_pool,
-            0,
+        session, bootstrap, cookie_file = _open_cookie_context(
+            pool,
+            None,
             target_page,
             job_id,
             "initial bootstrap",
             worker_name=worker_name,
+            worker_token=worker_token,
         )
 
         page_name = bootstrap.get("page_name") or source_page
@@ -780,15 +816,15 @@ def run_scraper(job: dict, worker_name: str = None):
         rollback_attempted_checkpoints = set()
         new_saved_this_run = 0
 
-        def rotate_cookie(reason: str, resume_cursor, resume_page_num: int, resume_skip_posts: int = 0):
-            nonlocal cookie_index, session, bootstrap, cookie_file, page_name, page_id
+        def rotate_cookie(reason: str, resume_cursor, resume_page_num: int, resume_skip_posts: int = 0,
+                          mark_failed: bool = True):
+            nonlocal session, bootstrap, cookie_file, page_name, page_id, pages_on_current_cookie
             nonlocal stale_pages, cycle_rebootstrap_retries, next_page_num, next_request_cursor, skip_posts_for_page
 
-            next_cookie_index = cookie_index + 1
-            if next_cookie_index >= len(cookie_pool):
-                raise RecoverableScrapePause(
-                    f"{reason}; all assigned cookies are exhausted at page {int(resume_page_num or 0)}"
-                )
+            # Mark the current cookie based on the reason that triggered rotation.
+            if mark_failed and cookie_file is not None:
+                synthetic_exc = RuntimeError(reason)
+                pool.classify_and_mark(cookie_file, synthetic_exc)
 
             if session is not None:
                 try:
@@ -797,13 +833,14 @@ def run_scraper(job: dict, worker_name: str = None):
                     pass
 
             rotate_scrape_proxy(worker_name or job_id)
-            cookie_index, session, bootstrap, cookie_file = _open_cookie_context(
-                cookie_pool,
-                next_cookie_index,
+            session, bootstrap, cookie_file = _open_cookie_context(
+                pool,
+                cookie_file,
                 target_page,
                 job_id,
                 reason,
                 worker_name=worker_name,
+                worker_token=worker_token,
             )
             page_name = bootstrap.get("page_name") or page_name
             page_id = bootstrap.get("user_id") or page_id
@@ -826,10 +863,11 @@ def run_scraper(job: dict, worker_name: str = None):
             stale_pages = 0
             cycle_rebootstrap_retries = 0
             rollback_attempted_checkpoints.clear()
+            pages_on_current_cookie = 0
 
             logging.info(
                 f"[Scraper] [{job_id}] Switched to cookie {_cookie_label(cookie_file)} "
-                f"at page={next_page_num:04d} after {reason}"
+                f"at page={next_page_num:04d} after {reason} (active={pool.active_count()}/{pool.total_count()})"
             )
 
         while True:
@@ -842,6 +880,23 @@ def run_scraper(job: dict, worker_name: str = None):
             request_cursor = next_request_cursor
             page_skip_posts = max(skip_posts_for_page, 0)
             skip_posts_for_page = 0
+            pages_on_current_cookie += 1
+
+            # Proactive rotation: spread load across cookies before any single one gets throttled.
+            if pages_on_current_cookie > ROTATE_EVERY_PAGES and pool.active_count() > 1:
+                next_cookie = pool.next(cookie_file)
+                if next_cookie and next_cookie != cookie_file:
+                    logging.info(
+                        f"[Scraper] [{job_id}] Proactive rotation at page {current_page_num:04d}: "
+                        f"{_cookie_label(cookie_file)} → {_cookie_label(next_cookie)}"
+                    )
+                    try:
+                        rotate_cookie("proactive rotation", request_cursor, current_page_num, page_skip_posts,
+                                      mark_failed=False)
+                        time.sleep(REQUEST_DELAY)
+                        continue
+                    except RecoverableScrapePause:
+                        logging.warning(f"[Scraper] [{job_id}] Proactive rotation failed; continuing on current cookie")
 
             if current_page_num > 1 and current_page_num % REST_EVERY == 0:
                 logging.info(f"[Scraper] [{job_id}] Resting {REST_DURATION}s ...")
@@ -1036,8 +1091,9 @@ def run_scraper(job: dict, worker_name: str = None):
                     time.sleep(REQUEST_DELAY)
                     continue
 
-                if cookie_index + 1 < len(cookie_pool):
-                    rotate_cookie("feed cycling detected", request_cursor, current_page_num, 0)
+                if pool.active_count() > 1:
+                    rotate_cookie("feed cycling detected", request_cursor, current_page_num, 0,
+                                  mark_failed=False)
                     time.sleep(REQUEST_DELAY)
                     continue
 
@@ -1045,11 +1101,12 @@ def run_scraper(job: dict, worker_name: str = None):
                 break
 
             if not has_more or not next_request_cursor:
-                if ts_from is not None and cookie_index + 1 < len(cookie_pool):
+                if ts_from is not None and pool.active_count() > 1:
                     logging.info(
                         f"[Scraper] [{job_id}] Feed exhausted before date_from boundary — trying next cookie"
                     )
-                    rotate_cookie("feed exhausted before date_from boundary", request_cursor, current_page_num, 0)
+                    rotate_cookie("feed exhausted before date_from boundary", request_cursor, current_page_num, 0,
+                                  mark_failed=False)
                     time.sleep(REQUEST_DELAY)
                     continue
                 logging.info(f"[Scraper] [{job_id}] Feed exhausted")

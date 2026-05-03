@@ -3,16 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>All Content — Facebook Scraper</title>
+  <title>All Content — Social Media Ultimate Scraper</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --blue: #1877F2;
-      --blue-dk: #0d5dcc;
-      --blue-lt: #e8f0fe;
+      --pink: #EC4899;
+      --pink-dk: #BE185D;
+      --pink-lt: #FCE7F3;
       --black: #0a0a0a;
       --white: #ffffff;
       --bg: #f7f8fa;
@@ -33,7 +33,7 @@
     .back-btn:hover { color: var(--white); }
     .nav-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.12); }
     .nav-page-info { display: flex; align-items: center; gap: 10px; }
-    .nav-logo { width: 28px; height: 28px; background: var(--blue); border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .nav-logo { width: 28px; height: 28px; background: var(--pink); border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .nav-page-name { font-size: 14px; font-weight: 600; color: var(--white); max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .nav-right { display: flex; align-items: center; gap: 10px; }
     .btn-export {
@@ -54,14 +54,14 @@
     .category-bar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 4px; position: sticky; top: var(--nav-h); z-index: 91; overflow-x: auto; }
     .category-btn { height: 46px; padding: 0 18px; background: none; border: none; border-bottom: 2.5px solid transparent; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: all 0.15s; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
     .category-btn:hover { color: var(--text); }
-    .category-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+    .category-btn.active { color: var(--pink); border-bottom-color: var(--pink); font-weight: 600; }
     .category-bar::-webkit-scrollbar { display: none; }
     .filter-bar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; display: flex; align-items: center; gap: 4px; position: sticky; top: calc(var(--nav-h) + 46px); z-index: 90; overflow-x: auto; }
     .filter-btn { height: 48px; padding: 0 18px; background: none; border: none; border-bottom: 2.5px solid transparent; font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer; letter-spacing: 0.2px; transition: all 0.15s; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
     .filter-btn:hover { color: var(--text); }
-    .filter-btn.active { color: var(--blue); border-bottom-color: var(--blue); font-weight: 600; }
+    .filter-btn.active { color: var(--pink); border-bottom-color: var(--pink); font-weight: 600; }
     .filter-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; padding: 0 5px; border-radius: 9px; font-size: 10px; font-weight: 700; background: var(--bg); color: var(--muted); }
-    .filter-btn.active .filter-count { background: var(--blue-lt); color: var(--blue); }
+    .filter-btn.active .filter-count { background: var(--pink-lt); color: var(--pink); }
     .grid-wrap { max-width: 1440px; margin: 0 auto; padding: 28px 32px 48px; }
     .posts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
     .post-card { background: var(--white); border: 1px solid var(--border); border-radius: var(--card-r); overflow: hidden; display: flex; flex-direction: column; transition: box-shadow 0.15s, transform 0.15s; }
@@ -71,20 +71,20 @@
     .media-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #0d0d1a; }
     .media-placeholder svg { opacity: 0.25; }
     .media-type-badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.7); color: var(--white); font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; padding: 3px 8px; border-radius: 2px; }
-    .media-type-badge.video { background: rgba(24,119,242,0.85); }
+    .media-type-badge.video { background: rgba(236,72,153,0.85); }
     .media-type-badge.image { background: rgba(0,0,0,0.6); }
     .media-type-badge.text { background: rgba(10,10,10,0.7); }
     .card-body { padding: 14px 16px; flex: 1; display: flex; flex-direction: column; gap: 8px; }
     .card-source-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; }
     .card-source-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600; flex-shrink: 0; }
-    .card-source-link { color: var(--blue); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+    .card-source-link { color: var(--pink); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
     .card-source-link:hover { text-decoration: underline; }
     .card-date { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
     .card-desc { font-size: 13px; color: var(--text); line-height: 1.55; flex: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
     .card-desc.na { color: var(--muted); font-style: italic; }
     .card-footer { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
     .footer-links, .footer-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .card-link { font-size: 11px; font-weight: 600; color: var(--blue); text-decoration: none; display: flex; align-items: center; gap: 4px; letter-spacing: 0.2px; transition: opacity 0.15s; }
+    .card-link { font-size: 11px; font-weight: 600; color: var(--pink); text-decoration: none; display: flex; align-items: center; gap: 4px; letter-spacing: 0.2px; transition: opacity 0.15s; }
     .card-link:hover { opacity: 0.7; }
     .s3-btn { font-size: 11px; font-weight: 600; color: #059669; text-decoration: none; display: flex; align-items: center; gap: 3px; padding: 2px 7px; border: 1px solid #d1fae5; background: #f0fdf4; border-radius: 3px; transition: opacity 0.15s; letter-spacing: 0.2px; }
     .s3-btn:hover { opacity: 0.7; }
@@ -92,11 +92,11 @@
     .dl-completed { background: #f0fdf4; color: #16a34a; }
     .dl-pending { background: #f3f4f6; color: #9ca3af; }
     .dl-failed { background: #fff1f2; color: #e11d48; }
-    .dl-downloading { background: var(--blue-lt); color: var(--blue); }
+    .dl-downloading { background: var(--pink-lt); color: var(--pink); }
     .pagination { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 32px; padding-bottom: 16px; flex-wrap: wrap; }
     .page-btn { height: 36px; min-width: 36px; padding: 0 12px; border: 1.5px solid var(--border); border-radius: 2px; background: var(--white); font-family: 'Outfit', sans-serif; font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer; transition: all 0.15s; }
-    .page-btn:hover { border-color: var(--blue); color: var(--blue); }
-    .page-btn.active { background: var(--blue); border-color: var(--blue); color: var(--white); font-weight: 600; }
+    .page-btn:hover { border-color: var(--pink); color: var(--pink); }
+    .page-btn.active { background: var(--pink); border-color: var(--pink); color: var(--white); font-weight: 600; }
     .page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .page-info { font-size: 12px; color: var(--muted); padding: 0 8px; }
     .empty-state { grid-column: 1/-1; text-align: center; padding: 80px 24px; color: var(--muted); }
@@ -128,7 +128,7 @@
     </a>
     <div class="nav-divider"></div>
     <div class="nav-page-info">
-      <div class="nav-logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z" fill="#fff"/></svg></div>
+      <div class="nav-logo"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></div>
       <span class="nav-page-name">All Content</span>
     </div>
   </div>
@@ -149,7 +149,7 @@
       <div class="page-counts">
         <div class="count-item"><div class="count-value" id="count-total">—</div><div class="count-label">Total Posts</div></div>
         <div class="count-item"><div class="count-value" id="count-sources">—</div><div class="count-label">Sources</div></div>
-        <div class="count-item"><div class="count-value" id="count-video" style="color:var(--blue)">—</div><div class="count-label">Video</div></div>
+        <div class="count-item"><div class="count-value" id="count-video" style="color:var(--pink)">—</div><div class="count-label">Video</div></div>
         <div class="count-item"><div class="count-value" id="count-image">—</div><div class="count-label">Image</div></div>
         <div class="count-item"><div class="count-value" id="count-text" style="color:var(--muted)">—</div><div class="count-label">Text Only</div></div>
       </div>
@@ -245,7 +245,7 @@
     const sourceName = post.page_name || post.facebook_url || 'Unknown Source';
     const sourceGallery = post.job_id ? `/gallery/${post.job_id}` : '#';
     const posterSrc = (() => { const s3 = tryParse(post.image_s3_urls); if (s3 && s3.length) return s3[0]; const orig = tryParse(post.image_urls); if (orig && orig.length) return orig[0]; return ''; })();
-    const categoryChip = post.source_category ? `<span style="font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-lt);padding:2px 7px;border-radius:999px;white-space:nowrap">${escapeHtml(post.source_category)}</span>` : '';
+    const categoryChip = post.source_category ? `<span style="font-size:10px;font-weight:700;color:var(--pink);background:var(--pink-lt);padding:2px 7px;border-radius:999px;white-space:nowrap">${escapeHtml(post.source_category)}</span>` : '';
     let mediaHtml = '';
     if (isVideo) {
       const vidSrc = firstVideo(post);
