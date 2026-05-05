@@ -290,6 +290,7 @@ def prepare_jobs_for_worker_startup(scraping_worker_limits) -> dict:
                            SET control_action = NULL,
                                active_worker_stage = NULL,
                                active_worker_token = NULL,
+                               active_worker_name = NULL,
                                completed_at = NULL
                            WHERE status = 'scraping'
                              AND job_id IN ({placeholders})""",
@@ -305,6 +306,7 @@ def prepare_jobs_for_worker_startup(scraping_worker_limits) -> dict:
                                control_action = NULL,
                                active_worker_stage = NULL,
                                active_worker_token = NULL,
+                               active_worker_name = NULL,
                                completed_at = NULL
                            WHERE status = 'scraping'
                              AND job_id IN ({placeholders})""",
@@ -316,6 +318,7 @@ def prepare_jobs_for_worker_startup(scraping_worker_limits) -> dict:
                    SET control_action = NULL,
                        active_worker_stage = NULL,
                        active_worker_token = NULL,
+                       active_worker_name = NULL,
                        completed_at = NULL
                    WHERE status = 'downloading_content'"""
             )
@@ -457,6 +460,7 @@ def start_downloads(job_id: str):
                        error_message = NULL,
                        active_worker_stage = NULL,
                        active_worker_token = NULL,
+                       active_worker_name = NULL,
                        total_media_count = %s,
                        total_media_downloaded = %s,
                        completed_at = NULL
@@ -522,6 +526,7 @@ def retry_failed_downloads(job_id: str):
                        error_message = NULL,
                        active_worker_stage = NULL,
                        active_worker_token = NULL,
+                       active_worker_name = NULL,
                        total_media_count = %s,
                        total_media_downloaded = %s,
                        completed_at = NULL
@@ -598,6 +603,7 @@ def rerun_job(job_id: str):
                            error_message = NULL,
                            active_worker_stage = NULL,
                            active_worker_token = NULL,
+                           active_worker_name = NULL,
                            scrape_resume_cursor = NULL,
                            scrape_resume_page_num = 0,
                            scrape_resume_skip_posts = 0,
@@ -636,6 +642,7 @@ def rerun_job(job_id: str):
                        error_message = NULL,
                        active_worker_stage = NULL,
                        active_worker_token = NULL,
+                       active_worker_name = NULL,
                        scrape_resume_cursor = NULL,
                        scrape_resume_page_num = 0,
                        scrape_resume_skip_posts = 0,
@@ -844,7 +851,7 @@ def get_jobs_by_status(status: str):
         conn.close()
 
 
-def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM):
+def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str = None):
     """Claim the oldest interrupted scraping job for the requested source platform."""
     conn = get_connection()
     try:
@@ -876,6 +883,7 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM):
                     f"""UPDATE fb_scrape_jobs
                        SET active_worker_stage = %s,
                            active_worker_token = %s,
+                           active_worker_name = %s,
                            scrape_last_progress_at = NOW(),
                            completed_at = NULL
                        WHERE job_id = %s
@@ -891,6 +899,7 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM):
                     (
                         SCRAPING_WORKER_STAGE,
                         worker_token,
+                        worker_name,
                         row["job_id"],
                         SCRAPING_WORKER_STAGE,
                         stale_before,
@@ -906,7 +915,7 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM):
         conn.close()
 
 
-def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM):
+def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str = None):
     """Claim the oldest pending job for the requested source platform and move it to scraping."""
     conn = get_connection()
     try:
@@ -932,12 +941,13 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM):
                            control_action = NULL,
                            active_worker_stage = %s,
                            active_worker_token = %s,
+                           active_worker_name = %s,
                            started_scraping_at = NOW(),
                            scrape_last_progress_at = NOW(),
                            error_message = NULL,
                            completed_at = NULL
                        WHERE job_id = %s AND status = 'pending' AND {predicate}""",
-                    (SCRAPING_WORKER_STAGE, worker_token, job_id),
+                    (SCRAPING_WORKER_STAGE, worker_token, worker_name, job_id),
                 )
                 if cur.rowcount != 1:
                     continue
@@ -949,7 +959,7 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM):
         conn.close()
 
 
-def claim_next_downloading_job():
+def claim_next_downloading_job(worker_name: str = None):
     """Claim the oldest job in downloading_content."""
     conn = get_connection()
     try:
@@ -963,6 +973,12 @@ def claim_next_downloading_job():
             if not row:
                 conn.rollback()
                 return None
+            if worker_name:
+                cur.execute(
+                    "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
+                    (worker_name, row["job_id"]),
+                )
+                row["active_worker_name"] = worker_name
             conn.commit()
             return row
     except Exception:
@@ -989,6 +1005,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "completed_at = NULL",
             ])
         elif status == "scraping":
@@ -1005,6 +1022,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "scraping_completed_at = COALESCE(scraping_completed_at, NOW())",
                 "scrape_last_progress_at = NOW()",
                 "completed_at = NULL",
@@ -1015,6 +1033,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "scrape_last_progress_at = NOW()",
                 "completed_at = NULL",
             ])
@@ -1023,6 +1042,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "scrape_last_progress_at = NOW()",
                 "completed_at = NOW()",
             ])
@@ -1031,6 +1051,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "completed_at = NOW()",
             ])
         elif status == "failed":
@@ -1038,6 +1059,7 @@ def update_job_status(
                 "control_action = NULL",
                 "active_worker_stage = NULL",
                 "active_worker_token = NULL",
+                "active_worker_name = NULL",
                 "completed_at = COALESCE(completed_at, NOW())",
             ])
 
@@ -1563,6 +1585,7 @@ def retry_single_post_download(post_id: int):
                            error_message = NULL,
                            active_worker_stage = NULL,
                            active_worker_token = NULL,
+                           active_worker_name = NULL,
                            total_media_count = %s,
                            total_media_downloaded = %s,
                            completed_at = NULL

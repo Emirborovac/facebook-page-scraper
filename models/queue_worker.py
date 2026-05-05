@@ -74,13 +74,13 @@ async def scraping_worker(platform: str = "facebook", worker_name: str = "facebo
     loop = asyncio.get_event_loop()
     while True:
         try:
-            job = await loop.run_in_executor(executor, partial(claim_next_scraping_job, platform))
+            job = await loop.run_in_executor(executor, partial(claim_next_scraping_job, platform, worker_name=worker_name))
             if job:
                 logging.info(f"[ScrapeWorker:{worker_name}] Resuming {platform} job {job['job_id']}")
                 await loop.run_in_executor(executor, partial(run_scraper, job, worker_name=worker_name))
                 continue
 
-            job = await loop.run_in_executor(executor, partial(claim_next_pending_job, platform))
+            job = await loop.run_in_executor(executor, partial(claim_next_pending_job, platform, worker_name=worker_name))
             if job:
                 logging.info(f"[ScrapeWorker:{worker_name}] Claimed {platform} job {job['job_id']}")
                 await loop.run_in_executor(executor, partial(run_scraper, job, worker_name=worker_name))
@@ -99,7 +99,7 @@ async def download_worker():
     loop = asyncio.get_event_loop()
     while True:
         try:
-            job = await loop.run_in_executor(_DOWNLOAD_EXECUTOR, claim_next_downloading_job)
+            job = await loop.run_in_executor(_DOWNLOAD_EXECUTOR, partial(claim_next_downloading_job, worker_name="download-1"))
             if job:
                 logging.info(f"[DownloadWorker] Claimed job {job['job_id']}")
                 await loop.run_in_executor(_DOWNLOAD_EXECUTOR, download_job_media, job)
