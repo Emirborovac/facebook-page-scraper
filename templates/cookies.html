@@ -233,10 +233,13 @@
     });
   }
 
-  function workerCardHtml(platformId, worker) {
+  function workerCardHtml(platformId, worker, kind = 'scraping') {
+    // kind: 'scraping' (worker_N) or 'download' (download_N)
     const dotClass = worker.cookie_count === 0 ? 'dot zero' : 'dot';
+    const moveAction = kind === 'download' ? 'move-to-download' : 'move';
+    const restoreAction = kind === 'download' ? 'restore-to-download' : 'restore';
     const cookies = worker.cookies.length === 0
-      ? '<div class="empty">No cookies — burn rate will pause this worker</div>'
+      ? `<div class="empty">No cookies — ${kind === 'download' ? 'downloads will fall back to other pools' : 'this worker will pause once cookies burn'}</div>`
       : worker.cookies.map(c => `
         <div class="cookie-row">
           <div style="overflow:hidden;flex:1">
@@ -244,7 +247,7 @@
             <div class="cookie-meta">${fmtBytes(c.size)}</div>
           </div>
           <div class="cookie-actions">
-            <button class="icon-btn" title="Move" data-action="move" data-platform="${platformId}" data-source="${worker.name}" data-file="${escapeHtml(c.name)}">
+            <button class="icon-btn" title="Move" data-action="${moveAction}" data-platform="${platformId}" data-source="${worker.name}" data-file="${escapeHtml(c.name)}">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
             </button>
             <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platformId}" data-location="${worker.name}" data-file="${escapeHtml(c.name)}">
@@ -265,7 +268,7 @@
                 <div class="cookie-meta">${fmtBytes(c.size)}</div>
               </div>
               <div class="cookie-actions">
-                <button class="icon-btn success" title="Restore" data-action="restore" data-platform="${platformId}" data-source="${worker.name}/cookie_trash" data-file="${escapeHtml(c.name)}">
+                <button class="icon-btn success" title="Restore" data-action="${restoreAction}" data-platform="${platformId}" data-source="${worker.name}/cookie_trash" data-file="${escapeHtml(c.name)}">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
                 </button>
                 <button class="icon-btn danger" title="Delete forever" data-action="delete" data-platform="${platformId}" data-location="${worker.name}/cookie_trash" data-file="${escapeHtml(c.name)}">
@@ -276,12 +279,13 @@
           `).join('')}
         </div>`;
 
+    const labelKind = kind === 'download' ? 'Download lane' : 'Scraping worker';
     return `
       <div class="worker-card">
         <div class="worker-head">
           <div class="worker-title"><span class="${dotClass}"></span>${escapeHtml(worker.name)}</div>
           <div class="worker-stats">
-            <div class="stat"><span class="stat-value ${worker.cookie_count === 0 ? 'red' : 'green'}">${worker.cookie_count}</span><span class="stat-label">Active</span></div>
+            <div class="stat"><span class="stat-value ${worker.cookie_count === 0 ? 'red' : 'green'}">${worker.cookie_count}</span><span class="stat-label">${labelKind === 'Download lane' ? 'Active' : 'Active'}</span></div>
             <div class="stat"><span class="stat-value">${worker.trash_count}</span><span class="stat-label">Burnt</span></div>
           </div>
         </div>
@@ -295,30 +299,45 @@
     const platform = state.inventory.platforms.find(p => p.id === state.activePlatform);
     if (!platform) { container.innerHTML = ''; return; }
 
-    const workersHtml = `<div class="worker-grid">${platform.workers.map(w => workerCardHtml(platform.id, w)).join('')}</div>`;
+    const scrapingTotal = platform.workers.reduce((s, w) => s + w.cookie_count, 0);
+    const downloadTotal = (platform.download_workers || []).reduce((s, w) => s + w.cookie_count, 0);
+
+    const scrapingHead = `<div class="section-head">Scraping Workers <span class="section-badge">${scrapingTotal}</span><div class="line"></div></div>`;
+    const workersHtml = scrapingHead + `<div class="worker-grid">${platform.workers.map(w => workerCardHtml(platform.id, w, 'scraping')).join('')}</div>`;
 
     let extra = '';
 
-    // Download cookies — separate pool used by the media downloader.
-    extra += `<div class="section-head">Download Cookies <span class="section-badge">${platform.download_count}</span><div class="line"></div></div>`;
-    extra += `<div class="worker-grid"><div class="worker-card">
-      <div class="worker-head">
-        <div class="worker-title"><span class="dot ${platform.download_count === 0 ? 'zero' : ''}"></span>cookies/${escapeHtml(platform.id)}/download/</div>
-        <div class="worker-stats"><div class="stat"><span class="stat-value ${platform.download_count === 0 ? 'red' : 'green'}">${platform.download_count}</span><span class="stat-label">Downloader</span></div></div>
-      </div>
-      <div class="cookie-list">${platform.download_count === 0
-          ? '<div class="empty">No dedicated download cookies — falling back to worker pool. Upload some here to isolate downloads from scraping.</div>'
-          : platform.download_cookies.map(c => `
-              <div class="cookie-row">
-                <div style="overflow:hidden;flex:1"><div class="cookie-name">${escapeHtml(c.name)}</div><div class="cookie-meta">${fmtBytes(c.size)}</div></div>
-                <div class="cookie-actions">
-                  <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platform.id}" data-location="download" data-file="${escapeHtml(c.name)}">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-                  </button>
-                </div>
-              </div>`).join('')}
-      </div>
-    </div></div>`;
+    // Per-lane download workers (mirror of scraping workers).
+    extra += `<div class="section-head">Download Workers <span class="section-badge">${downloadTotal}</span><div class="line"></div></div>`;
+    extra += `<div class="worker-grid">${(platform.download_workers || []).map(w => workerCardHtml(platform.id, w, 'download')).join('')}</div>`;
+
+    // Legacy shared download pool — only show if it has cookies (acts as fallback).
+    if (platform.download_count > 0) {
+      extra += `<div class="section-head">Legacy Shared Download Pool <span class="section-badge">${platform.download_count}</span><div class="line"></div></div>`;
+      extra += `<div class="worker-grid"><div class="worker-card">
+        <div class="worker-head">
+          <div class="worker-title"><span class="dot"></span>cookies/${escapeHtml(platform.id)}/download/</div>
+          <div class="worker-stats"><div class="stat"><span class="stat-value">${platform.download_count}</span><span class="stat-label">Fallback</span></div></div>
+        </div>
+        <div style="padding:8px 0;border-bottom:1px dashed var(--border);margin-bottom:6px">
+          <button class="btn-primary" data-action="redistribute-legacy" data-platform="${platform.id}" style="width:100%">
+            Distribute all ${platform.download_count} cookies → download lanes
+          </button>
+        </div>
+        <div class="cookie-list">${platform.download_cookies.map(c => `
+          <div class="cookie-row">
+            <div style="overflow:hidden;flex:1"><div class="cookie-name">${escapeHtml(c.name)}</div><div class="cookie-meta">${fmtBytes(c.size)}</div></div>
+            <div class="cookie-actions">
+              <button class="icon-btn" title="Move into a download lane" data-action="move-to-download" data-platform="${platform.id}" data-source="download" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              <button class="icon-btn danger" title="Delete" data-action="delete" data-platform="${platform.id}" data-location="download" data-file="${escapeHtml(c.name)}">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="3 6 5 6 21 6"/></svg>
+              </button>
+            </div>
+          </div>`).join('')}</div>
+      </div></div>`;
+    }
 
     if (platform.shared_count > 0) {
       extra += `<div class="section-head">Shared / Legacy <span class="section-badge">${platform.shared_count}</span><div class="line"></div></div>`;
@@ -374,6 +393,24 @@
     const platform = d.platform;
     const file = d.file;
 
+    if (d.action === 'redistribute-legacy') {
+      const platformInfo = state.inventory.platforms.find(p => p.id === platform);
+      if (!confirm(`Distribute all ${platformInfo.download_count} cookies from the legacy shared pool across the ${platformInfo.worker_count} download lanes?`)) return;
+      const fd = new FormData();
+      fd.append('platform', platform);
+      const res = await fetch('/api/cookies/redistribute-legacy-downloads', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Redistribute failed: ' + (err.detail || res.status));
+      } else {
+        const body = await res.json();
+        const lanes = Object.entries(body.lanes || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        alert(`Moved ${body.moved} cookies. Distribution: ${lanes || '(empty)'}`);
+      }
+      await refresh();
+      return;
+    }
+
     if (d.action === 'delete') {
       if (!confirm(`Delete ${file}?`)) return;
       const url = `/api/cookies/${encodeURIComponent(platform)}/${encodeURIComponent(d.location)}/${encodeURIComponent(file)}`;
@@ -382,28 +419,32 @@
         const err = await res.json().catch(() => ({}));
         alert('Delete failed: ' + (err.detail || res.status));
       }
-    } else if (d.action === 'restore') {
+    } else if (d.action === 'restore' || d.action === 'restore-to-download') {
       const platformInfo = state.inventory.platforms.find(p => p.id === platform);
-      const target = prompt(`Restore ${file} to which worker? (1-${platformInfo.worker_count})`, '1');
+      const kindLabel = d.action === 'restore-to-download' ? 'download lane' : 'scraping worker';
+      const target = prompt(`Restore ${file} to which ${kindLabel}? (1-${platformInfo.worker_count})`, '1');
       if (!target) return;
       const fd = new FormData();
       fd.append('platform', platform);
       fd.append('source_location', d.source);
       fd.append('filename', file);
       fd.append('target_worker', target);
+      if (d.action === 'restore-to-download') fd.append('lane_kind', 'download');
       const res = await fetch('/api/cookies/restore', { method: 'POST', body: fd });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         alert('Restore failed: ' + (err.detail || res.status));
       }
-    } else if (d.action === 'move') {
+    } else if (d.action === 'move' || d.action === 'move-to-download') {
       const platformInfo = state.inventory.platforms.find(p => p.id === platform);
-      const target = prompt(`Move ${file} to which worker? (1-${platformInfo.worker_count})`, '1');
+      const prefix = d.action === 'move-to-download' ? 'download_' : 'worker_';
+      const kindLabel = d.action === 'move-to-download' ? 'download lane' : 'scraping worker';
+      const target = prompt(`Move ${file} to which ${kindLabel}? (1-${platformInfo.worker_count})`, '1');
       if (!target) return;
       const fd = new FormData();
       fd.append('platform', platform);
       fd.append('source_location', d.source);
-      fd.append('dest_location', `worker_${parseInt(target)}`);
+      fd.append('dest_location', `${prefix}${parseInt(target)}`);
       fd.append('filename', file);
       const res = await fetch('/api/cookies/move', { method: 'POST', body: fd });
       if (!res.ok) {
@@ -423,12 +464,24 @@
     function updateLocations() {
       const platform = state.inventory.platforms.find(p => p.id === platformSel.value);
       if (!platform) { locationSel.innerHTML = ''; return; }
-      const opts = ['<option value="auto">Auto-distribute across workers</option>'];
+      const opts = [
+        '<optgroup label="Scraping workers">',
+        '<option value="auto">Auto-distribute across scraping workers</option>',
+      ];
       for (let i = 1; i <= platform.worker_count; i++) {
-        opts.push(`<option value="worker_${i}">worker_${i}</option>`);
+        opts.push(`<option value="worker_${i}">worker_${i} (scraping)</option>`);
       }
-      opts.push('<option value="download">Download pool (downloader only)</option>');
-      opts.push('<option value="shared">Shared (legacy)</option>');
+      opts.push('</optgroup>');
+      opts.push('<optgroup label="Download workers">');
+      opts.push('<option value="auto_download">Auto-distribute across download workers</option>');
+      for (let i = 1; i <= platform.worker_count; i++) {
+        opts.push(`<option value="download_${i}">download_${i} (download lane)</option>`);
+      }
+      opts.push('</optgroup>');
+      opts.push('<optgroup label="Other">');
+      opts.push('<option value="download">Legacy shared download pool</option>');
+      opts.push('<option value="shared">Shared (legacy root)</option>');
+      opts.push('</optgroup>');
       locationSel.innerHTML = opts.join('');
     }
     platformSel.addEventListener('change', updateLocations);

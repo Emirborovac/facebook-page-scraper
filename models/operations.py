@@ -879,11 +879,13 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str 
                 if not row:
                     return None
 
+                assigned_dl_worker = derive_download_worker_name(worker_name)
                 cur.execute(
                     f"""UPDATE fb_scrape_jobs
                        SET active_worker_stage = %s,
                            active_worker_token = %s,
                            active_worker_name = %s,
+                           assigned_download_worker = COALESCE(assigned_download_worker, %s),
                            scrape_last_progress_at = NOW(),
                            completed_at = NULL
                        WHERE job_id = %s
@@ -900,6 +902,7 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str 
                         SCRAPING_WORKER_STAGE,
                         worker_token,
                         worker_name,
+                        assigned_dl_worker,
                         row["job_id"],
                         SCRAPING_WORKER_STAGE,
                         stale_before,
@@ -915,6 +918,24 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str 
         conn.close()
 
 
+def derive_download_worker_name(scraping_worker_name: str | None) -> str | None:
+    """Map a scraping worker name to its paired download worker name.
+
+    'instagram-3' -> 'instagram-download-3'
+    'facebook-1'  -> 'facebook-download-1'
+    'tiktok-7'    -> 'tiktok-download-7'
+
+    The download worker that consumes a job is determined at scrape-claim time
+    and persisted in fb_scrape_jobs.assigned_download_worker.
+    """
+    if not scraping_worker_name:
+        return None
+    parts = scraping_worker_name.rsplit('-', 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        return None
+    return f"{parts[0]}-download-{parts[1]}"
+
+
 def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str = None):
     """Claim the oldest pending job for the requested source platform and move it to scraping."""
     conn = get_connection()
@@ -922,6 +943,7 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
         for _ in range(CLAIM_RETRY_LIMIT):
             worker_token = str(uuid.uuid4())
             predicate = _platform_predicate_sql(platform)
+            assigned_dl_worker = derive_download_worker_name(worker_name)
             with conn.cursor() as cur:
                 cur.execute(
                     f"""SELECT job_id FROM fb_scrape_jobs
@@ -942,12 +964,13 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
                            active_worker_stage = %s,
                            active_worker_token = %s,
                            active_worker_name = %s,
+                           assigned_download_worker = COALESCE(assigned_download_worker, %s),
                            started_scraping_at = NOW(),
                            scrape_last_progress_at = NOW(),
                            error_message = NULL,
                            completed_at = NULL
                        WHERE job_id = %s AND status = 'pending' AND {predicate}""",
-                    (SCRAPING_WORKER_STAGE, worker_token, worker_name, job_id),
+                    (SCRAPING_WORKER_STAGE, worker_token, worker_name, assigned_dl_worker, job_id),
                 )
                 if cur.rowcount != 1:
                     continue
@@ -960,13 +983,14 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
 
 
 def claim_next_downloading_job(worker_name: str = None):
-    """Claim the oldest job in downloading_content."""
+    """Claim the oldest job in downloading_content (legacy — used when no per-lane assignment)."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT * FROM fb_scrape_jobs
                    WHERE status = 'downloading_content'
+                     AND assigned_download_worker IS NULL
                    ORDER BY COALESCE(scraping_completed_at, created_at) ASC LIMIT 1 FOR UPDATE"""
             )
             row = cur.fetchone()
@@ -979,6 +1003,57 @@ def claim_next_downloading_job(worker_name: str = None):
                     (worker_name, row["job_id"]),
                 )
                 row["active_worker_name"] = worker_name
+            conn.commit()
+            return row
+    except Exception:
+        conn.rollback()
+        return None
+    finally:
+        conn.close()
+
+
+def claim_download_job_for_worker(download_worker_name: str, batch_trigger: int = 5):
+    """Claim a downloadable job assigned to *download_worker_name*.
+
+    Eligibility:
+      - status = 'downloading_content' (always — finish any leftovers), OR
+      - status = 'scraping' AND has >= batch_trigger pending download posts (drip-feed mode)
+
+    Priority: downloading_content jobs ahead of mid-scrape drip jobs, then by age.
+    """
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT j.*, COALESCE(p.pending_count, 0) AS pending_count
+                   FROM fb_scrape_jobs j
+                   LEFT JOIN (
+                       SELECT job_id, COUNT(*) AS pending_count
+                       FROM fb_posts
+                       WHERE download_status = 'pending'
+                       GROUP BY job_id
+                   ) p ON p.job_id = j.job_id
+                   WHERE j.assigned_download_worker = %s
+                     AND (
+                         j.status = 'downloading_content'
+                         OR (j.status = 'scraping' AND COALESCE(p.pending_count, 0) >= %s)
+                     )
+                   ORDER BY
+                     CASE WHEN j.status = 'downloading_content' THEN 0 ELSE 1 END,
+                     COALESCE(j.scraping_completed_at, j.started_scraping_at, j.created_at) ASC
+                   LIMIT 1
+                   FOR UPDATE""",
+                (download_worker_name, batch_trigger),
+            )
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                return None
+            cur.execute(
+                "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
+                (download_worker_name, row["job_id"]),
+            )
+            row["active_worker_name"] = download_worker_name
             conn.commit()
             return row
     except Exception:

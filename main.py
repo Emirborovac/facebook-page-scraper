@@ -52,6 +52,7 @@ from models.queue_worker import (
     INSTAGRAM_SCRAPING_WORKER_COUNT,
     SCRAPING_WORKER_COUNT,
     download_worker,
+    legacy_download_sweeper,
     scraping_worker,
     shutdown_worker_executors,
 )
@@ -98,11 +99,22 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(scraping_worker(platform="instagram", worker_name=f"instagram-{index + 1}"))
         for index in range(INSTAGRAM_SCRAPING_WORKER_COUNT)
     ]
-    download_task = asyncio.create_task(download_worker())
+    # Per-lane download workers — paired 1:1 with scraping workers by index.
+    download_tasks = []
+    for index in range(FACEBOOK_SCRAPING_WORKER_COUNT):
+        download_tasks.append(asyncio.create_task(download_worker("facebook", index + 1)))
+    for index in range(TIKTOK_SCRAPING_WORKER_COUNT):
+        download_tasks.append(asyncio.create_task(download_worker("tiktok", index + 1)))
+    for index in range(INSTAGRAM_SCRAPING_WORKER_COUNT):
+        download_tasks.append(asyncio.create_task(download_worker("instagram", index + 1)))
+    # Legacy sweeper picks up old jobs that have no assigned_download_worker.
+    legacy_download_task = asyncio.create_task(legacy_download_sweeper())
+    download_tasks.append(legacy_download_task)
+
     logging.info(
-        f"[App] {FACEBOOK_SCRAPING_WORKER_COUNT} Facebook scraping workers, "
-        f"{TIKTOK_SCRAPING_WORKER_COUNT} TikTok scraping workers, "
-        f"{INSTAGRAM_SCRAPING_WORKER_COUNT} Instagram scraping workers, and 1 download worker started."
+        f"[App] {FACEBOOK_SCRAPING_WORKER_COUNT} Facebook + {TIKTOK_SCRAPING_WORKER_COUNT} TikTok + "
+        f"{INSTAGRAM_SCRAPING_WORKER_COUNT} Instagram scraping workers, "
+        f"{len(download_tasks) - 1} per-lane download workers + 1 legacy sweeper started."
     )
 
     loop = asyncio.get_event_loop()
@@ -113,8 +125,9 @@ async def lifespan(app: FastAPI):
 
     for task in scrape_tasks:
         task.cancel()
-    download_task.cancel()
-    await asyncio.gather(*scrape_tasks, download_task, return_exceptions=True)
+    for task in download_tasks:
+        task.cancel()
+    await asyncio.gather(*scrape_tasks, *download_tasks, return_exceptions=True)
     shutdown_worker_executors()
     logging.info("[App] Workers stopped.")
 
@@ -123,7 +136,7 @@ async def lifespan(app: FastAPI):
 # App
 # ──────────────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Facebook Page Scraper", lifespan=lifespan)
+app = FastAPI(title="Social Media Ultimate Scraper", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
@@ -594,7 +607,9 @@ async def cookies_upload_endpoint(
     errors: list[dict] = []
     try:
         if location == "auto":
-            saved = cookie_admin.auto_distribute_uploads(platform, payloads)
+            saved = cookie_admin.auto_distribute_uploads(platform, payloads, lane_kind="scraping")
+        elif location == "auto_download":
+            saved = cookie_admin.auto_distribute_uploads(platform, payloads, lane_kind="download")
         else:
             for filename, content in payloads:
                 try:
@@ -637,6 +652,19 @@ async def cookies_move_endpoint(
     return JSONResponse({"moved": True, "file": result})
 
 
+@app.post("/api/cookies/redistribute-legacy-downloads")
+async def cookies_redistribute_legacy_downloads_endpoint(
+    request: Request,
+    platform: str = Form(...),
+):
+    require_auth(request)
+    try:
+        result = cookie_admin.redistribute_legacy_download_pool(platform)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return JSONResponse(result)
+
+
 @app.post("/api/cookies/restore")
 async def cookies_restore_endpoint(
     request: Request,
@@ -644,10 +672,13 @@ async def cookies_restore_endpoint(
     source_location: str = Form(...),
     filename: str = Form(...),
     target_worker: int = Form(1),
+    lane_kind: str = Form("scraping"),
 ):
     require_auth(request)
     try:
-        result = cookie_admin.restore_from_trash(platform, source_location, filename, target_worker)
+        result = cookie_admin.restore_from_trash(
+            platform, source_location, filename, target_worker, lane_kind=lane_kind,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:

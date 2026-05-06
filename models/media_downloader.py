@@ -42,6 +42,13 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./downloads")
 FACEBOOK_COOKIE_DIR = Path(os.getenv("FACEBOOK_COOKIE_DIR", "./cookies/facebook"))
 INSTAGRAM_COOKIE_DIR = Path(os.getenv("INSTAGRAM_COOKIE_DIR", "./cookies/instagram"))
 MAX_WORKERS = int(os.getenv("DOWNLOAD_MAX_WORKERS", "5"))
+# Per-download-worker concurrency. Each download worker spins up this many
+# concurrent media-download threads. Total system parallelism =
+# (download_workers_per_platform × DOWNLOAD_CONCURRENCY_PER_WORKER × platforms).
+DOWNLOAD_CONCURRENCY_PER_WORKER = max(int(os.getenv("DOWNLOAD_CONCURRENCY_PER_WORKER", "5")), 1)
+# A scraping job becomes eligible for drip-feed downloads once it has this many
+# pending posts. Lower = more responsive but more overhead.
+DOWNLOAD_BATCH_TRIGGER = max(int(os.getenv("DOWNLOAD_BATCH_TRIGGER", "5")), 1)
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
 IG_DOWNLOAD_USE_COOKIES = os.getenv("IG_DOWNLOAD_USE_COOKIES", "false").strip().lower() in ("1", "true", "yes")
@@ -196,6 +203,15 @@ def _instagram_cookie_files() -> list[Path]:
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Smart download cookie pools (thread-safe, with cooldown + burnt detection).
+#
+# The system supports two pool keys:
+#   - per-worker lane (preferred): "instagram-download-3" → cookies/instagram/download_3/
+#   - per-platform shared (fallback): "instagram" → cookies/instagram/download/
+#
+# Per-worker lanes give isolation: when scraper-3 produces posts, download
+# worker-3 downloads them using only its own cookies. If a lane has no cookies,
+# the system falls back to the shared download/ pool, then to the worker_N/
+# scraping cookies.
 # Lazy-initialized and refreshed periodically so cookies uploaded via the
 # dashboard get picked up without a service restart.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -206,18 +222,76 @@ _POOL_LAST_REFRESH: dict[str, float] = {}
 _POOL_REFRESH_INTERVAL = 60.0  # seconds
 
 
-def _get_download_pool(platform: str) -> CookiePool | None:
-    if platform == 'facebook':
-        files_fn = _facebook_cookie_files
-    elif platform == 'instagram':
-        files_fn = _instagram_cookie_files
-    else:
+def _parse_download_worker_name(worker_name: str | None) -> tuple[str, int] | None:
+    """('instagram-download-3') -> ('instagram', 3). Returns None if not a lane."""
+    if not worker_name:
         return None
+    parts = worker_name.rsplit('-', 1)
+    if len(parts) != 2 or not parts[1].isdigit():
+        return None
+    base, idx = parts[0], int(parts[1])
+    if not base.endswith('-download'):
+        return None
+    return base[: -len('-download')], idx
 
+
+def _lane_cookie_files(worker_name: str | None) -> list[Path]:
+    """Cookie files for a specific download lane, with fallbacks.
+
+    Order:
+      1. cookies/<platform>/download_N/    (the worker's dedicated lane)
+      2. cookies/<platform>/download/      (shared download pool)
+      3. cookies/<platform>/worker_N/      (the matching scraping worker's pool)
+      4. cookies/<platform>/*.txt + sub worker_*/ (legacy, via _download_cookie_files)
+    """
+    parsed = _parse_download_worker_name(worker_name)
+    if parsed is None:
+        return []
+    platform, idx = parsed
+    base = FACEBOOK_COOKIE_DIR if platform == 'facebook' else (
+        INSTAGRAM_COOKIE_DIR if platform == 'instagram' else None
+    )
+    if base is None:
+        return []
+
+    lane_dir = base / f'download_{idx}'
+    if lane_dir.is_dir():
+        files = sorted(p for p in lane_dir.glob('*.txt') if p.is_file())
+        if files:
+            return files
+
+    shared_dir = base / 'download'
+    if shared_dir.is_dir():
+        files = sorted(p for p in shared_dir.glob('*.txt') if p.is_file())
+        if files:
+            return files
+
+    scraper_dir = base / f'worker_{idx}'
+    if scraper_dir.is_dir():
+        files = sorted(
+            p for p in scraper_dir.glob('*.txt')
+            if p.is_file() and p.parent.name != 'cookie_trash'
+        )
+        if files:
+            return files
+
+    return _download_cookie_files(base)
+
+
+def _platform_files_fn(platform: str):
+    if platform == 'facebook':
+        return _facebook_cookie_files
+    if platform == 'instagram':
+        return _instagram_cookie_files
+    return None
+
+
+def _get_or_make_pool(key: str, files_fn) -> CookiePool | None:
+    """Lazy-create + periodically refresh a pool keyed by *key*."""
     now = time.time()
     with _POOL_LOCK:
-        pool = _POOLS.get(platform)
-        last = _POOL_LAST_REFRESH.get(platform, 0.0)
+        pool = _POOLS.get(key)
+        last = _POOL_LAST_REFRESH.get(key, 0.0)
         if pool is None:
             files = files_fn()
             if not files:
@@ -228,31 +302,59 @@ def _get_download_pool(platform: str) -> CookiePool | None:
                 is_throttle_fn=_is_download_throttle_error,
                 throttle_cooldown=DOWNLOAD_THROTTLE_COOLDOWN,
             )
-            _POOLS[platform] = pool
-            _POOL_LAST_REFRESH[platform] = now
+            _POOLS[key] = pool
+            _POOL_LAST_REFRESH[key] = now
         elif (now - last) > _POOL_REFRESH_INTERVAL:
             files = files_fn()
             if files:
                 pool.replace_files(files)
-            _POOL_LAST_REFRESH[platform] = now
+            _POOL_LAST_REFRESH[key] = now
     return pool
 
 
-def _next_facebook_cookie_file(current: Path | None = None) -> Path | None:
-    pool = _get_download_pool('facebook')
+def _get_download_pool_for_worker(worker_name: str) -> CookiePool | None:
+    """Per-lane pool. Falls back to shared platform pool if lane has nothing."""
+    pool = _get_or_make_pool(worker_name, lambda: _lane_cookie_files(worker_name))
+    if pool is not None:
+        return pool
+    parsed = _parse_download_worker_name(worker_name)
+    if parsed is None:
+        return None
+    return _get_download_pool(parsed[0])
+
+
+def _get_download_pool(platform: str) -> CookiePool | None:
+    """Legacy platform-wide pool — used when no worker_name is available."""
+    files_fn = _platform_files_fn(platform)
+    if files_fn is None:
+        return None
+    return _get_or_make_pool(platform, files_fn)
+
+
+def _resolve_pool(platform: str, worker_name: str | None) -> CookiePool | None:
+    if worker_name:
+        pool = _get_download_pool_for_worker(worker_name)
+        if pool is not None:
+            return pool
+    return _get_download_pool(platform)
+
+
+def _next_facebook_cookie_file(current: Path | None = None, worker_name: str | None = None) -> Path | None:
+    pool = _resolve_pool('facebook', worker_name)
     if pool is None:
         return None
     return pool.next(current)
 
 
-def _next_instagram_cookie_file(current: Path | None = None) -> Path | None:
-    pool = _get_download_pool('instagram')
+def _next_instagram_cookie_file(current: Path | None = None, worker_name: str | None = None) -> Path | None:
+    pool = _resolve_pool('instagram', worker_name)
     if pool is None:
         return None
     return pool.next(current)
 
 
-def _mark_download_cookie_outcome(platform: str, cookie_file: Path | None, exc: Exception) -> str:
+def _mark_download_cookie_outcome(platform: str, cookie_file: Path | None, exc: Exception,
+                                  worker_name: str | None = None) -> str:
     """Classify and record a download error against the cookie that handled it.
 
     Returns 'burnt', 'throttle', 'dead_content', or 'unknown'.
@@ -261,7 +363,7 @@ def _mark_download_cookie_outcome(platform: str, cookie_file: Path | None, exc: 
         return 'unknown'
     if _is_dead_content_error(exc):
         return 'dead_content'
-    pool = _get_download_pool(platform)
+    pool = _resolve_pool(platform, worker_name)
     if pool is None:
         return 'unknown'
     if _is_download_burnt_error(exc):
@@ -280,7 +382,8 @@ def _mark_download_cookie_outcome(platform: str, cookie_file: Path | None, exc: 
 MIN_IMAGE_BYTES = 500
 
 
-def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
+def _direct_binary_download(url: str, dest_path: str, platform: str,
+                            worker_name: str | None = None) -> bool:
     referer = 'https://www.instagram.com/' if platform == 'instagram' else 'https://www.facebook.com/'
     accept = '*/*' if platform == 'instagram' else 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
 
@@ -297,9 +400,9 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
         session = requests.Session()
         apply_download_proxy(session)
         if platform == 'instagram':
-            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+            cookie_file = _next_instagram_cookie_file(last_cookie, worker_name=worker_name) if IG_DOWNLOAD_USE_COOKIES else None
         elif platform == 'facebook':
-            cookie_file = _next_facebook_cookie_file(last_cookie)
+            cookie_file = _next_facebook_cookie_file(last_cookie, worker_name=worker_name)
         else:
             cookie_file = None
         last_cookie = cookie_file
@@ -330,7 +433,7 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
                 f'[Downloader] Binary too small ({size}B) attempt {attempt}/{max_attempts}: {url[:80]}'
             )
         except Exception as exc:
-            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc, worker_name=worker_name)
             cookie_label = cookie_file.name if cookie_file else 'no-cookie'
             logging.warning(
                 f'[Downloader] Binary attempt {attempt}/{max_attempts} failed '
@@ -346,7 +449,8 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
 
 
 def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'instagram',
-                          playlist_item: int | None = None) -> bool:
+                          playlist_item: int | None = None,
+                          worker_name: str | None = None) -> bool:
     """Use yt-dlp to download an image when the CDN URL has expired."""
     referer = "https://www.instagram.com/" if platform == 'instagram' else "https://www.facebook.com/"
 
@@ -360,9 +464,9 @@ def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'insta
     last_cookie: Path | None = None
     for attempt in range(1, max_attempts + 1):
         if platform == 'instagram':
-            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+            cookie_file = _next_instagram_cookie_file(last_cookie, worker_name=worker_name) if IG_DOWNLOAD_USE_COOKIES else None
         elif platform == 'facebook':
-            cookie_file = _next_facebook_cookie_file(last_cookie)
+            cookie_file = _next_facebook_cookie_file(last_cookie, worker_name=worker_name)
         else:
             cookie_file = None
         last_cookie = cookie_file
@@ -410,7 +514,7 @@ def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'insta
                 attempt, max_attempts, post_link[:80],
             )
         except Exception as exc:
-            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc, worker_name=worker_name)
             cookie_label = cookie_file.name if cookie_file else 'no-cookie'
             logging.warning(
                 "[Downloader] Image fallback attempt %s/%s failed (%s, cookie=%s): %s",
@@ -426,13 +530,15 @@ def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'insta
 
 
 def _download_image(url: str, dest_path: str, platform: str = 'facebook',
-                    fallback_url: str | None = None, fallback_playlist_item: int | None = None) -> bool:
-    if _direct_binary_download(url, dest_path, platform):
+                    fallback_url: str | None = None, fallback_playlist_item: int | None = None,
+                    worker_name: str | None = None) -> bool:
+    if _direct_binary_download(url, dest_path, platform, worker_name=worker_name):
         return True
     if fallback_url:
         logging.info("[Downloader] CDN failed, trying yt-dlp fallback for %s image: %s", platform, fallback_url[:80])
         return _ytdlp_image_fallback(fallback_url, dest_path, platform=platform,
-                                     playlist_item=fallback_playlist_item)
+                                     playlist_item=fallback_playlist_item,
+                                     worker_name=worker_name)
     return False
 
 
@@ -441,7 +547,8 @@ def _download_image(url: str, dest_path: str, platform: str = 'facebook',
 # Video downloader — yt_dlp Python library with Facebook cookies
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _download_video(url: str, dest_path: str, platform: str | None = None) -> bool:
+def _download_video(url: str, dest_path: str, platform: str | None = None,
+                    worker_name: str | None = None) -> bool:
     platform = platform or _video_source_platform(url)
     referers = {"tiktok": "https://www.tiktok.com/", "instagram": "https://www.instagram.com/"}
     referer = referers.get(platform, "https://www.facebook.com/")
@@ -458,9 +565,9 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
     for attempt in range(1, max_attempts + 1):
         # Pick the next AVAILABLE cookie (skips ones currently cooling down).
         if platform == 'facebook':
-            cookie_file = _next_facebook_cookie_file(last_cookie)
+            cookie_file = _next_facebook_cookie_file(last_cookie, worker_name=worker_name)
         elif platform == 'instagram':
-            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+            cookie_file = _next_instagram_cookie_file(last_cookie, worker_name=worker_name) if IG_DOWNLOAD_USE_COOKIES else None
         else:
             cookie_file = None
         last_cookie = cookie_file
@@ -514,7 +621,7 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
                 f"[Downloader] Video file missing after attempt {attempt}/{max_attempts}: {url[:80]}"
             )
         except (yt_dlp.utils.DownloadError, Exception) as exc:
-            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc, worker_name=worker_name)
             cookie_label = cookie_file.name if cookie_file else 'no-cookie'
             logging.warning(
                 "[Downloader] Video attempt %s/%s failed (%s, cookie=%s): %s",
@@ -561,7 +668,8 @@ def _cleanup_video_files(dest_path: str):
 # Per-post download task
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _process_post(post: dict, job_id: str, cancel: Event | None = None) -> bool:
+def _process_post(post: dict, job_id: str, cancel: Event | None = None,
+                  worker_name: str | None = None) -> bool:
     post_id = post["id"]
     post_link = post.get("post_link") or post.get("video_url") or ""
     platform = _video_source_platform(post_link)
@@ -633,7 +741,8 @@ def _process_post(post: dict, job_id: str, cancel: Event | None = None) -> bool:
             fb_item = (idx + 1) if num_images > 1 else None
             try:
                 if _download_image(image_url, local_path, platform=platform,
-                                   fallback_url=fallback_url, fallback_playlist_item=fb_item):
+                                   fallback_url=fallback_url, fallback_playlist_item=fb_item,
+                                   worker_name=worker_name):
                     url_out, key = upload_file_to_s3(local_path, s3_name, content_type="image/jpeg")
                     s3_image_urls.append(url_out)
                     s3_image_keys.append(key)
@@ -653,7 +762,7 @@ def _process_post(post: dict, job_id: str, cancel: Event | None = None) -> bool:
         s3_name = f"{job_id}/{uid}_video.mp4"
         dl_url = post_link if platform == "instagram" and post_link else video_url
         try:
-            if _download_video(dl_url, local_path, platform=platform):
+            if _download_video(dl_url, local_path, platform=platform, worker_name=worker_name):
                 url_out, key = upload_file_to_s3(local_path, s3_name, content_type="video/mp4")
                 s3_video_url = url_out
                 s3_video_key = key
@@ -681,11 +790,24 @@ def _process_post(post: dict, job_id: str, cancel: Event | None = None) -> bool:
 # Main download entry point
 # ──────────────────────────────────────────────────────────────────────────────
 
-def download_job_media(job: dict):
-    """Download all media for a job in downloading_content status."""
+def download_job_media(job: dict, worker_name: str | None = None, concurrency: int | None = None):
+    """Drain pending media downloads for a job.
+
+    Behaviour depends on the job's current status:
+      - 'downloading_content': drain all + finalize (mark completed/failed)
+      - 'scraping' (drip-feed mode): drain currently-pending only; don't finalize
+        (the scraper hasn't finished producing posts yet)
+    """
     job_id = job["job_id"]
     _ensure_output_dir()
-    logging.info(f"[Downloader] [{job_id}] Starting media downloads")
+    job_status_at_start = job.get("status") or "downloading_content"
+    is_drip_mode = job_status_at_start == "scraping"
+    concurrency = max(int(concurrency or MAX_WORKERS), 1)
+    label = worker_name or 'download'
+    logging.info(
+        f"[Downloader:{label}] [{job_id}] Starting media downloads "
+        f"(mode={'drip' if is_drip_mode else 'finalize'}, concurrency={concurrency})"
+    )
 
     try:
         progress = get_download_progress(job_id)
@@ -693,9 +815,12 @@ def download_job_media(job: dict):
         completed_count = progress["completed"]
         posts = get_pending_download_posts(job_id)
 
-        if total == 0:
+        if total == 0 and not is_drip_mode:
             update_job_status(job_id, "completed")
-            logging.info(f"[Downloader] [{job_id}] No media posts — marking completed")
+            logging.info(f"[Downloader:{label}] [{job_id}] No media posts — marking completed")
+            return
+        if not posts and is_drip_mode:
+            logging.info(f"[Downloader:{label}] [{job_id}] No pending posts in drip cycle — yielding")
             return
 
         update_job_progress(job_id, total_media_count=total, total_media_downloaded=completed_count)
@@ -703,40 +828,43 @@ def download_job_media(job: dict):
         state = get_job_control_state(job_id)
         if state and state.get("control_action"):
             action = apply_job_control_action(job_id, "downloading_content")
-            logging.info(f"[Downloader] [{job_id}] Control action applied before start: {action}")
+            logging.info(f"[Downloader:{label}] [{job_id}] Control action applied before start: {action}")
             return
 
         pending_action = None
         post_iter = iter(posts)
         cancel = Event()
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
             in_flight = {}
 
             def fill_pool():
                 nonlocal pending_action
-                while not pending_action and len(in_flight) < MAX_WORKERS:
+                while not pending_action and len(in_flight) < concurrency:
                     try:
                         post = next(post_iter)
                     except StopIteration:
                         break
-                    future = pool.submit(_process_post, post, job_id, cancel)
+                    future = pool.submit(_process_post, post, job_id, cancel, worker_name)
                     in_flight[future] = post
 
             fill_pool()
             if not in_flight:
                 if get_pending_download_posts(job_id):
-                    logging.info(f"[Downloader] [{job_id}] Waiting for download queue to refill")
+                    logging.info(f"[Downloader:{label}] [{job_id}] Waiting for download queue to refill")
+                elif is_drip_mode:
+                    logging.info(f"[Downloader:{label}] [{job_id}] Drip cycle finished — yielding")
+                    return
                 else:
                     progress = get_download_progress(job_id)
                     update_job_progress(job_id, total_media_count=progress["total"], total_media_downloaded=progress["completed"])
                     if progress["failed"] or progress["remaining"]:
                         msg = f"Media incomplete: completed={progress['completed']} failed={progress['failed']} remaining={progress['remaining']}"
                         update_job_status(job_id, "failed", error_message=msg, extra={"resume_stage": "downloading_content"})
-                        logging.warning(f"[Downloader] [{job_id}] {msg}")
+                        logging.warning(f"[Downloader:{label}] [{job_id}] {msg}")
                     else:
                         update_job_status(job_id, "completed")
-                        logging.info(f"[Downloader] [{job_id}] Nothing left to download")
+                        logging.info(f"[Downloader:{label}] [{job_id}] Nothing left to download")
                     return
 
             while in_flight:
@@ -751,36 +879,46 @@ def download_job_media(job: dict):
 
                 if pending_action and not cancel.is_set():
                     cancel.set()
-                    logging.info(f"[Downloader] [{job_id}] Cancel signal sent — draining {len(in_flight)} in-flight tasks")
+                    logging.info(f"[Downloader:{label}] [{job_id}] Cancel signal sent — draining {len(in_flight)} in-flight tasks")
 
                 for future in done_set:
                     in_flight.pop(future, None)
                     try:
                         future.result()
                     except Exception as exc:
-                        logging.error(f"[Downloader] [{job_id}] Future error: {exc}")
+                        logging.error(f"[Downloader:{label}] [{job_id}] Future error: {exc}")
 
                 if not cancel.is_set():
                     progress = get_download_progress(job_id)
                     update_job_progress(job_id, total_media_count=progress["total"], total_media_downloaded=progress["completed"])
-                    logging.info(f"[Downloader] [{job_id}] Media progress: {progress['completed']}/{progress['total']} (failed={progress['failed']} remaining={progress['remaining']})")
+                    logging.info(f"[Downloader:{label}] [{job_id}] Media progress: {progress['completed']}/{progress['total']} (failed={progress['failed']} remaining={progress['remaining']})")
                     fill_pool()
 
         if pending_action:
             action = apply_job_control_action(job_id, "downloading_content")
-            logging.info(f"[Downloader] [{job_id}] Control action applied: {action}")
+            logging.info(f"[Downloader:{label}] [{job_id}] Control action applied: {action}")
             return
 
         progress = get_download_progress(job_id)
         update_job_progress(job_id, total_media_count=progress["total"], total_media_downloaded=progress["completed"])
+
+        if is_drip_mode:
+            # Don't terminate the job; scraper is still active. Just log progress and return.
+            logging.info(
+                f"[Downloader:{label}] [{job_id}] Drip cycle done "
+                f"(completed={progress['completed']}/{progress['total']} failed={progress['failed']} remaining={progress['remaining']})"
+            )
+            return
+
         if progress["failed"] or progress["remaining"]:
             msg = f"Media incomplete: completed={progress['completed']} failed={progress['failed']} remaining={progress['remaining']}"
             update_job_status(job_id, "failed", error_message=msg, extra={"resume_stage": "downloading_content"})
-            logging.warning(f"[Downloader] [{job_id}] {msg}")
+            logging.warning(f"[Downloader:{label}] [{job_id}] {msg}")
         else:
             update_job_status(job_id, "completed")
-            logging.info(f"[Downloader] [{job_id}] All downloads complete ({progress['completed']}/{progress['total']})")
+            logging.info(f"[Downloader:{label}] [{job_id}] All downloads complete ({progress['completed']}/{progress['total']})")
 
     except Exception as exc:
-        logging.error(f"[Downloader] [{job_id}] FAILED: {exc}", exc_info=True)
-        update_job_status(job_id, "failed", error_message=str(exc), extra={"resume_stage": "downloading_content"})
+        logging.error(f"[Downloader:{label}] [{job_id}] FAILED: {exc}", exc_info=True)
+        if not is_drip_mode:
+            update_job_status(job_id, "failed", error_message=str(exc), extra={"resume_stage": "downloading_content"})
