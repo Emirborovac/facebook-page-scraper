@@ -42,12 +42,30 @@ def _column_exists(cur, table_name: str, column_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def _is_permission_error(exc: Exception) -> bool:
+    """Best-effort detection of MySQL DDL permission errors (1142, 1227, 1044)."""
+    code = getattr(exc, "args", [None])[0] if getattr(exc, "args", None) else None
+    if code in (1142, 1227, 1044):
+        return True
+    msg = str(exc).lower()
+    return "alter command denied" in msg or "access denied" in msg
+
+
 def _ensure_job_status_enum(cur):
     enum_sql = ",".join(f"'{value}'" for value in JOB_STATUS_VALUES)
-    cur.execute(
-        f"""ALTER TABLE fb_scrape_jobs
-            MODIFY COLUMN status ENUM({enum_sql}) DEFAULT 'pending'"""
-    )
+    try:
+        cur.execute(
+            f"""ALTER TABLE fb_scrape_jobs
+                MODIFY COLUMN status ENUM({enum_sql}) DEFAULT 'pending'"""
+        )
+    except Exception as exc:
+        if _is_permission_error(exc):
+            logging.warning(
+                "[DB] No ALTER permission to normalize status ENUM — assuming it's already correct. "
+                "If new statuses were added, run the migration manually with a privileged user."
+            )
+        else:
+            raise
 
 
 def _ensure_fb_scrape_jobs_columns(cur):
@@ -72,23 +90,51 @@ def _ensure_fb_scrape_jobs_columns(cur):
         # Normalized URL used for duplicate detection. Populated lazily.
         ("normalized_url", "VARCHAR(512) DEFAULT NULL"),
     ]
+    missing = []
     for column_name, definition in required_columns:
-        if not _column_exists(cur, "fb_scrape_jobs", column_name):
+        if _column_exists(cur, "fb_scrape_jobs", column_name):
+            continue
+        try:
             cur.execute(f"ALTER TABLE fb_scrape_jobs ADD COLUMN {column_name} {definition}")
+        except Exception as exc:
+            if _is_permission_error(exc):
+                missing.append((column_name, definition))
+            else:
+                raise
 
-    cur.execute(
-        """UPDATE fb_scrape_jobs
-           SET resume_stage = CASE
-               WHEN status = 'downloading_content' OR scraping_completed_at IS NOT NULL THEN 'downloading_content'
-               ELSE 'scraping'
-           END
-           WHERE resume_stage IS NULL OR resume_stage = ''"""
-    )
-    cur.execute(
-        """UPDATE fb_scrape_jobs
-           SET scrape_last_progress_at = COALESCE(started_scraping_at, created_at)
-           WHERE scrape_last_progress_at IS NULL AND status IN ('scraping', 'downloading_content')"""
-    )
+    if missing:
+        sql_lines = "\n".join(
+            f"  ALTER TABLE fb_scrape_jobs ADD COLUMN {name} {defn};"
+            for name, defn in missing
+        )
+        logging.warning(
+            "[DB] No ALTER permission to add %d column(s). The app will start "
+            "but features depending on these columns will fail. Run this SQL "
+            "manually with a privileged MySQL user:\n%s",
+            len(missing), sql_lines,
+        )
+
+    # The two backfill UPDATEs below only need DML; they should always succeed
+    # for the app user. Wrap defensively anyway.
+    try:
+        cur.execute(
+            """UPDATE fb_scrape_jobs
+               SET resume_stage = CASE
+                   WHEN status = 'downloading_content' OR scraping_completed_at IS NOT NULL THEN 'downloading_content'
+                   ELSE 'scraping'
+               END
+               WHERE resume_stage IS NULL OR resume_stage = ''"""
+        )
+    except Exception as exc:
+        logging.warning("[DB] resume_stage backfill skipped: %s", exc)
+    try:
+        cur.execute(
+            """UPDATE fb_scrape_jobs
+               SET scrape_last_progress_at = COALESCE(started_scraping_at, created_at)
+               WHERE scrape_last_progress_at IS NULL AND status IN ('scraping', 'downloading_content')"""
+        )
+    except Exception as exc:
+        logging.warning("[DB] scrape_last_progress_at backfill skipped: %s", exc)
 
 
 def init_db():
