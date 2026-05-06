@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 import pymysql
 from dotenv import load_dotenv
@@ -30,6 +31,73 @@ JOB_STATUS_VALUES = (
 )
 
 
+# ── Schema-tolerant cursor ─────────────────────────────────────────────
+# Some optional columns (active_worker_name, assigned_download_worker,
+# normalized_url, last_scraped_*) may not exist when the app user can't ALTER.
+# When that happens, this cursor automatically strips references to those
+# columns from outgoing SET / column-list SQL so existing code keeps working.
+
+# Populated at first init_db() call (or first SHOW COLUMNS).
+_MISSING_COLUMNS: set[str] = set()
+
+# Columns that are safe to silently strip when missing. They're all metadata
+# the app would like to record but can do without.
+_OPTIONAL_COLUMNS = {
+    "active_worker_name",
+    "assigned_download_worker",
+    "normalized_url",
+    "last_scraped_cursor",
+    "last_scraped_page_num",
+    "last_scraped_at",
+}
+
+
+def _set_missing_columns(missing):
+    global _MISSING_COLUMNS
+    _MISSING_COLUMNS = {c for c in missing if c in _OPTIONAL_COLUMNS}
+
+
+def _filter_sql_for_missing_columns(sql: str) -> str:
+    """Remove SET / INSERT references to columns that don't exist on the table.
+
+    Conservative: only handles two patterns the app uses:
+      1. ``<col> = ...,`` inside SET clauses (with optional trailing comma)
+      2. column lists in INSERTs are NOT touched here — those funcs are already
+         schema-aware via _has_column().
+    """
+    if not _MISSING_COLUMNS or not sql:
+        return sql
+    for col in _MISSING_COLUMNS:
+        # Strip "<col> = <value>,\n" (with surrounding whitespace) — most common form.
+        sql = re.sub(
+            rf"\s*{re.escape(col)}\s*=\s*[^,\n)]+,",
+            "",
+            sql,
+        )
+        # Strip a trailing-no-comma form: "<col> = <value>" right before WHERE/end.
+        sql = re.sub(
+            rf",\s*{re.escape(col)}\s*=\s*[^,\n)]+(?=(\s*WHERE|\s*$))",
+            "",
+            sql,
+            flags=re.IGNORECASE,
+        )
+    return sql
+
+
+class _SchemaTolerantCursor(pymysql.cursors.DictCursor):
+    """DictCursor that auto-strips missing-column references from SQL."""
+
+    def execute(self, query, args=None):
+        if _MISSING_COLUMNS and isinstance(query, str):
+            query = _filter_sql_for_missing_columns(query)
+        return super().execute(query, args)
+
+    def executemany(self, query, args):
+        if _MISSING_COLUMNS and isinstance(query, str):
+            query = _filter_sql_for_missing_columns(query)
+        return super().executemany(query, args)
+
+
 def get_connection():
     return pymysql.connect(
         host=DB_HOST,
@@ -38,7 +106,7 @@ def get_connection():
         password=DB_PASSWORD,
         database=DB_NAME,
         charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
+        cursorclass=_SchemaTolerantCursor,
         autocommit=True,
         connect_timeout=10,
     )
@@ -257,6 +325,26 @@ def init_db():
                     cur.execute("CREATE INDEX idx_fb_jobs_normalized_url ON fb_scrape_jobs (normalized_url)")
                 except Exception as exc:
                     logging.warning(f"[DB] Could not add normalized_url index: {exc}")
+
+            # Detect which optional columns made it onto the table. The schema-
+            # tolerant cursor uses this list to silently strip references to
+            # missing columns from later UPDATE/INSERT statements.
+            cur.execute("SHOW COLUMNS FROM fb_scrape_jobs")
+            existing_cols = {
+                row.get("Field") if isinstance(row, dict) else (row[0] if row else None)
+                for row in (cur.fetchall() or [])
+            }
+            missing_optional = _OPTIONAL_COLUMNS - {c for c in existing_cols if c}
+            _set_missing_columns(missing_optional)
+            if missing_optional:
+                logging.warning(
+                    "[DB] Optional columns missing from fb_scrape_jobs: %s. "
+                    "References to these columns will be auto-stripped from "
+                    "outgoing SQL so the app can keep running. Features that "
+                    "depend on them (duplicate detection, scan-for-new, "
+                    "per-lane download workers) will degrade gracefully.",
+                    sorted(missing_optional),
+                )
 
         logging.info("[DB] Tables fb_scrape_jobs and fb_posts ready.")
     except Exception as exc:

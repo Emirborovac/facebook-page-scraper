@@ -36,6 +36,53 @@ def invalidate_cache(*keys):
 
 RUNNING_STATUSES = {"scraping", "downloading_content"}
 IDLE_STATUSES = {"pending", "paused", "stopped", "completed", "failed"}
+
+# ── Schema-tolerance helpers ────────────────────────────────────────────
+# The app user may lack ALTER privilege, in which case some optional columns
+# (normalized_url, last_scraped_*, assigned_download_worker, active_worker_name)
+# may not exist on fb_scrape_jobs. These helpers let queries detect what's
+# available so they can degrade gracefully without crashing.
+_SCHEMA_LOCK = Lock()
+_TABLE_COLUMNS_CACHE: dict[str, set[str]] = {}
+
+
+def _table_columns(table: str) -> set[str]:
+    with _SCHEMA_LOCK:
+        cached = _TABLE_COLUMNS_CACHE.get(table)
+        if cached is not None:
+            return cached
+    cols: set[str] = set()
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SHOW COLUMNS FROM {table}")
+                for row in cur.fetchall() or []:
+                    name = row.get("Field") if isinstance(row, dict) else (row[0] if row else None)
+                    if name:
+                        cols.add(name)
+        finally:
+            conn.close()
+    except Exception as exc:
+        logging.warning("[DB] Could not introspect columns for %s: %s", table, exc)
+    with _SCHEMA_LOCK:
+        _TABLE_COLUMNS_CACHE[table] = cols
+    return cols
+
+
+def _has_column(table: str, column: str) -> bool:
+    cols = _table_columns(table)
+    if not cols:
+        # If introspection failed entirely, assume the column exists and let
+        # queries surface the real error rather than silently dropping it.
+        return True
+    return column in cols
+
+
+def invalidate_schema_cache():
+    """Re-read column list (call after a manual ALTER)."""
+    with _SCHEMA_LOCK:
+        _TABLE_COLUMNS_CACHE.clear()
 GOOD_CHECKPOINT_HISTORY_LIMIT = 20
 SCRAPING_WORKER_STAGE = "scraping"
 DOWNLOADING_WORKER_STAGE = "downloading_content"
@@ -52,16 +99,32 @@ CLAIM_RETRY_LIMIT = 20
 
 def create_job(job_id: str, facebook_url: str, date_from=None, date_to=None, max_posts=None,
                source_category=None, normalized_url: str = None):
+    """Insert a new job row.
+
+    Resilient to a missing ``normalized_url`` column — if the schema doesn't
+    have it (because the app user can't ALTER), the column is dropped from
+    the INSERT and the job is created without duplicate-detection metadata.
+    """
+    has_norm = _has_column("fb_scrape_jobs", "normalized_url")
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO fb_scrape_jobs
-                   (job_id, facebook_url, normalized_url, source_category, date_from, date_to,
-                    max_posts, status, resume_stage)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', 'scraping')""",
-                (job_id, facebook_url, normalized_url, source_category, date_from, date_to, max_posts),
-            )
+            if has_norm:
+                cur.execute(
+                    """INSERT INTO fb_scrape_jobs
+                       (job_id, facebook_url, normalized_url, source_category, date_from, date_to,
+                        max_posts, status, resume_stage)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', 'scraping')""",
+                    (job_id, facebook_url, normalized_url, source_category, date_from, date_to, max_posts),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO fb_scrape_jobs
+                       (job_id, facebook_url, source_category, date_from, date_to,
+                        max_posts, status, resume_stage)
+                       VALUES (%s, %s, %s, %s, %s, %s, 'pending', 'scraping')""",
+                    (job_id, facebook_url, source_category, date_from, date_to, max_posts),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -70,27 +133,44 @@ def create_job(job_id: str, facebook_url: str, date_from=None, date_to=None, max
 def find_jobs_by_normalized_url(normalized_url: str, limit: int = 20) -> list[dict]:
     """Return existing jobs that target the same normalized URL.
 
-    Used by the duplicate-detection endpoint at submit time. Falls back to a
-    LIKE match on facebook_url for jobs that pre-date the normalized_url
-    column (those rows have normalized_url = NULL).
+    Used by the duplicate-detection endpoint at submit time. Resilient to a
+    missing ``normalized_url`` column: falls back to a facebook_url match.
+    Optional last_scraped_* columns are also dropped from the SELECT when
+    the schema doesn't have them yet.
     """
     if not normalized_url:
         return []
+    cols = _table_columns("fb_scrape_jobs")
+    has_norm = (not cols) or "normalized_url" in cols
+    has_last = (not cols) or "last_scraped_page_num" in cols
+
+    base_cols = [
+        "job_id", "facebook_url", "status", "source_category",
+        "page_name", "page_id", "total_posts_scraped", "total_media_count",
+        "total_media_downloaded", "scrape_resume_page_num", "scrape_resume_cursor",
+        "started_scraping_at", "scraping_completed_at", "completed_at", "created_at",
+        "resume_stage", "error_message",
+    ]
+    if has_norm:
+        base_cols.insert(2, "normalized_url")
+    if has_last:
+        base_cols.extend(["last_scraped_page_num", "last_scraped_cursor", "last_scraped_at"])
+    select_list = ", ".join(base_cols)
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            if has_norm:
+                where_sql = "WHERE normalized_url = %s OR facebook_url = %s"
+                params = (normalized_url, normalized_url, limit)
+            else:
+                # No normalized_url column → match by exact facebook_url only.
+                where_sql = "WHERE facebook_url = %s"
+                params = (normalized_url, limit)
             cur.execute(
-                """SELECT job_id, facebook_url, normalized_url, status, source_category,
-                          page_name, page_id, total_posts_scraped, total_media_count,
-                          total_media_downloaded, scrape_resume_page_num, scrape_resume_cursor,
-                          last_scraped_page_num, last_scraped_cursor, last_scraped_at,
-                          started_scraping_at, scraping_completed_at, completed_at, created_at,
-                          resume_stage, error_message
-                   FROM fb_scrape_jobs
-                   WHERE normalized_url = %s OR facebook_url = %s
-                   ORDER BY created_at DESC
-                   LIMIT %s""",
-                (normalized_url, normalized_url, limit),
+                f"SELECT {select_list} FROM fb_scrape_jobs {where_sql} "
+                f"ORDER BY created_at DESC LIMIT %s",
+                params,
             )
             return cur.fetchall() or []
     finally:
@@ -101,21 +181,33 @@ def get_newest_post_timestamp_for_url(normalized_url: str) -> int | None:
     """Newest post timestamp (seconds) across all jobs for this URL.
 
     Used by "Scan for new" — the new job will set date_from to this+1 so the
-    scraper stops as soon as it reaches a post we already have.
+    scraper stops as soon as it reaches a post we already have. Resilient to
+    a missing normalized_url column (matches on facebook_url only).
     """
     if not normalized_url:
         return None
+    has_norm = _has_column("fb_scrape_jobs", "normalized_url")
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """SELECT MAX(p.published_timestamp) AS newest
-                   FROM fb_posts p
-                   JOIN fb_scrape_jobs j ON j.job_id = p.job_id
-                   WHERE (j.normalized_url = %s OR j.facebook_url = %s)
-                     AND p.published_timestamp IS NOT NULL""",
-                (normalized_url, normalized_url),
-            )
+            if has_norm:
+                cur.execute(
+                    """SELECT MAX(p.published_timestamp) AS newest
+                       FROM fb_posts p
+                       JOIN fb_scrape_jobs j ON j.job_id = p.job_id
+                       WHERE (j.normalized_url = %s OR j.facebook_url = %s)
+                         AND p.published_timestamp IS NOT NULL""",
+                    (normalized_url, normalized_url),
+                )
+            else:
+                cur.execute(
+                    """SELECT MAX(p.published_timestamp) AS newest
+                       FROM fb_posts p
+                       JOIN fb_scrape_jobs j ON j.job_id = p.job_id
+                       WHERE j.facebook_url = %s
+                         AND p.published_timestamp IS NOT NULL""",
+                    (normalized_url,),
+                )
             row = cur.fetchone()
             if not row or row.get("newest") is None:
                 return None
@@ -128,8 +220,13 @@ def get_newest_post_timestamp_for_url(normalized_url: str) -> int | None:
 
 
 def backfill_normalized_url(job_id: str, normalized_url: str) -> None:
-    """Set normalized_url on a legacy job row that was missing it."""
+    """Set normalized_url on a legacy job row that was missing it.
+
+    No-op if the column doesn't exist on the table.
+    """
     if not job_id or not normalized_url:
+        return
+    if not _has_column("fb_scrape_jobs", "normalized_url"):
         return
     conn = get_connection()
     try:
@@ -146,10 +243,12 @@ def backfill_normalized_url(job_id: str, normalized_url: str) -> None:
 def stamp_last_scraped(job_id: str, cursor: str | None, page_num: int, total_posts: int = None) -> None:
     """Persist 'last position scraped' so we can resume / scan-for-new later.
 
-    Called from the scraper at completion (and periodically during long runs).
-    Unlike scrape_resume_*, these columns are NEVER cleared on completion.
+    No-op when the optional last_scraped_* columns don't exist on the schema
+    (because the app user couldn't ALTER and the columns were never added).
     """
     if not job_id:
+        return
+    if not _has_column("fb_scrape_jobs", "last_scraped_page_num"):
         return
     conn = get_connection()
     try:
@@ -953,8 +1052,37 @@ def get_jobs_by_status(status: str):
         conn.close()
 
 
+def _build_claim_set_clause():
+    """Build the SET clause for scraping job claims, omitting columns that don't exist.
+
+    Returns (set_sql, value_builder) where value_builder is a function that
+    returns the parameter list given (worker_token, worker_name, assigned_dl_worker).
+    """
+    cols = _table_columns("fb_scrape_jobs")
+    has_name = (not cols) or "active_worker_name" in cols
+    has_assigned = (not cols) or "assigned_download_worker" in cols
+
+    parts = ["active_worker_stage = %s", "active_worker_token = %s"]
+    if has_name:
+        parts.append("active_worker_name = %s")
+    if has_assigned:
+        parts.append("assigned_download_worker = COALESCE(assigned_download_worker, %s)")
+    parts.extend(["scrape_last_progress_at = NOW()", "completed_at = NULL"])
+
+    def values(worker_token, worker_name, assigned_dl_worker):
+        out = [SCRAPING_WORKER_STAGE, worker_token]
+        if has_name:
+            out.append(worker_name)
+        if has_assigned:
+            out.append(assigned_dl_worker)
+        return out
+
+    return ", ".join(parts), values
+
+
 def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str = None):
     """Claim the oldest interrupted scraping job for the requested source platform."""
+    set_sql, build_values = _build_claim_set_clause()
     conn = get_connection()
     try:
         for _ in range(CLAIM_RETRY_LIMIT):
@@ -982,14 +1110,11 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str 
                     return None
 
                 assigned_dl_worker = derive_download_worker_name(worker_name)
+                params = build_values(worker_token, worker_name, assigned_dl_worker)
+                params.extend([row["job_id"], SCRAPING_WORKER_STAGE, stale_before])
                 cur.execute(
                     f"""UPDATE fb_scrape_jobs
-                       SET active_worker_stage = %s,
-                           active_worker_token = %s,
-                           active_worker_name = %s,
-                           assigned_download_worker = COALESCE(assigned_download_worker, %s),
-                           scrape_last_progress_at = NOW(),
-                           completed_at = NULL
+                       SET {set_sql}
                        WHERE job_id = %s
                          AND status = 'scraping'
                          AND {predicate}
@@ -1000,15 +1125,7 @@ def claim_next_scraping_job(platform: str = FACEBOOK_PLATFORM, worker_name: str 
                              OR scrape_last_progress_at IS NULL
                              OR scrape_last_progress_at < %s
                          )""",
-                    (
-                        SCRAPING_WORKER_STAGE,
-                        worker_token,
-                        worker_name,
-                        assigned_dl_worker,
-                        row["job_id"],
-                        SCRAPING_WORKER_STAGE,
-                        stale_before,
-                    ),
+                    params,
                 )
                 if cur.rowcount != 1:
                     continue
@@ -1040,6 +1157,29 @@ def derive_download_worker_name(scraping_worker_name: str | None) -> str | None:
 
 def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str = None):
     """Claim the oldest pending job for the requested source platform and move it to scraping."""
+    cols = _table_columns("fb_scrape_jobs")
+    has_name = (not cols) or "active_worker_name" in cols
+    has_assigned = (not cols) or "assigned_download_worker" in cols
+
+    set_parts = [
+        "status = 'scraping'",
+        "resume_stage = 'scraping'",
+        "control_action = NULL",
+        "active_worker_stage = %s",
+        "active_worker_token = %s",
+    ]
+    if has_name:
+        set_parts.append("active_worker_name = %s")
+    if has_assigned:
+        set_parts.append("assigned_download_worker = COALESCE(assigned_download_worker, %s)")
+    set_parts.extend([
+        "started_scraping_at = NOW()",
+        "scrape_last_progress_at = NOW()",
+        "error_message = NULL",
+        "completed_at = NULL",
+    ])
+    set_sql = ", ".join(set_parts)
+
     conn = get_connection()
     try:
         for _ in range(CLAIM_RETRY_LIMIT):
@@ -1058,21 +1198,17 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
                 if not row:
                     return None
                 job_id = row["job_id"]
+
+                params = [SCRAPING_WORKER_STAGE, worker_token]
+                if has_name:
+                    params.append(worker_name)
+                if has_assigned:
+                    params.append(assigned_dl_worker)
+                params.append(job_id)
                 cur.execute(
-                    f"""UPDATE fb_scrape_jobs
-                       SET status = 'scraping',
-                           resume_stage = 'scraping',
-                           control_action = NULL,
-                           active_worker_stage = %s,
-                           active_worker_token = %s,
-                           active_worker_name = %s,
-                           assigned_download_worker = COALESCE(assigned_download_worker, %s),
-                           started_scraping_at = NOW(),
-                           scrape_last_progress_at = NOW(),
-                           error_message = NULL,
-                           completed_at = NULL
-                       WHERE job_id = %s AND status = 'pending' AND {predicate}""",
-                    (SCRAPING_WORKER_STAGE, worker_token, worker_name, assigned_dl_worker, job_id),
+                    f"UPDATE fb_scrape_jobs SET {set_sql} "
+                    f"WHERE job_id = %s AND status = 'pending' AND {predicate}",
+                    params,
                 )
                 if cur.rowcount != 1:
                     continue
@@ -1085,21 +1221,28 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
 
 
 def claim_next_downloading_job(worker_name: str = None):
-    """Claim the oldest job in downloading_content (legacy — used when no per-lane assignment)."""
+    """Claim the oldest job in downloading_content (legacy — used when no per-lane assignment).
+
+    Tolerant of missing assigned_download_worker / active_worker_name columns.
+    """
+    cols = _table_columns("fb_scrape_jobs")
+    has_assigned = (not cols) or "assigned_download_worker" in cols
+    has_name = (not cols) or "active_worker_name" in cols
+
+    where_extra = " AND assigned_download_worker IS NULL" if has_assigned else ""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT * FROM fb_scrape_jobs
-                   WHERE status = 'downloading_content'
-                     AND assigned_download_worker IS NULL
-                   ORDER BY COALESCE(scraping_completed_at, created_at) ASC LIMIT 1 FOR UPDATE"""
+                f"""SELECT * FROM fb_scrape_jobs
+                    WHERE status = 'downloading_content'{where_extra}
+                    ORDER BY COALESCE(scraping_completed_at, created_at) ASC LIMIT 1 FOR UPDATE"""
             )
             row = cur.fetchone()
             if not row:
                 conn.rollback()
                 return None
-            if worker_name:
+            if worker_name and has_name:
                 cur.execute(
                     "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
                     (worker_name, row["job_id"]),
@@ -1122,7 +1265,15 @@ def claim_download_job_for_worker(download_worker_name: str, batch_trigger: int 
       - status = 'scraping' AND has >= batch_trigger pending download posts (drip-feed mode)
 
     Priority: downloading_content jobs ahead of mid-scrape drip jobs, then by age.
+    Returns None when the schema lacks ``assigned_download_worker`` (per-lane
+    workers can't filter, so the legacy sweeper handles all jobs instead).
     """
+    cols = _table_columns("fb_scrape_jobs")
+    has_assigned = (not cols) or "assigned_download_worker" in cols
+    has_name = (not cols) or "active_worker_name" in cols
+    if not has_assigned:
+        return None
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -1151,11 +1302,12 @@ def claim_download_job_for_worker(download_worker_name: str, batch_trigger: int 
             if not row:
                 conn.rollback()
                 return None
-            cur.execute(
-                "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
-                (download_worker_name, row["job_id"]),
-            )
-            row["active_worker_name"] = download_worker_name
+            if has_name:
+                cur.execute(
+                    "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
+                    (download_worker_name, row["job_id"]),
+                )
+                row["active_worker_name"] = download_worker_name
             conn.commit()
             return row
     except Exception:
