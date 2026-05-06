@@ -12,6 +12,13 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 
+# Optional admin credentials used ONLY at startup to apply DDL migrations
+# (CREATE/ALTER TABLE, CREATE INDEX). Falls back to the regular DB user if
+# unset. The admin connection is closed immediately after migrations run, so
+# the app does not hold elevated credentials at runtime.
+DB_ADMIN_USER = os.getenv("DB_ADMIN_USER") or DB_USER
+DB_ADMIN_PASSWORD = os.getenv("DB_ADMIN_PASSWORD") or DB_PASSWORD
+
 JOB_STATUS_VALUES = (
     "pending",
     "paused",
@@ -29,6 +36,25 @@ def get_connection():
         port=DB_PORT,
         user=DB_USER,
         password=DB_PASSWORD,
+        database=DB_NAME,
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+        connect_timeout=10,
+    )
+
+
+def get_admin_connection():
+    """Connect with DDL-capable credentials for one-shot schema migrations.
+
+    Falls back to the regular app user when DB_ADMIN_USER is not set. The
+    caller is expected to close this connection right after migrations run.
+    """
+    return pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_ADMIN_USER,
+        password=DB_ADMIN_PASSWORD,
         database=DB_NAME,
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
@@ -138,7 +164,15 @@ def _ensure_fb_scrape_jobs_columns(cur):
 
 
 def init_db():
-    conn = get_connection()
+    # Use the admin connection for schema migrations so we can CREATE/ALTER
+    # without granting DDL to the regular app user. Falls back to the app
+    # user when DB_ADMIN_USER is not set (DDL will then fail gracefully).
+    using_admin = bool(os.getenv("DB_ADMIN_USER"))
+    if using_admin:
+        logging.info("[DB] Running schema migrations as DB_ADMIN_USER=%s", DB_ADMIN_USER)
+        conn = get_admin_connection()
+    else:
+        conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
