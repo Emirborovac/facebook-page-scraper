@@ -19,6 +19,7 @@ from models.operations import (
     apply_job_control_action,
     get_job_post_count,
     save_post,
+    stamp_last_scraped,
     update_job_progress,
     update_job_scrape_checkpoint,
     update_job_status,
@@ -417,6 +418,10 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
 
     try:
         update_job_status(job_id, 'scraping')
+        # Stamp an initial checkpoint BEFORE the first network call so that any
+        # bootstrap-time failure still leaves a resumable position (page 1).
+        if page_num == 0:
+            update_job_scrape_checkpoint(job_id, max_id, 1, 0, total_saved)
         session, csrf, profile, cookie_file = _open_cookie_context(
             pool, None, username, job_id, 'initial session',
             worker_name=worker_name, worker_token=worker_token,
@@ -567,11 +572,16 @@ def run_instagram_scraper(job: dict, worker_name: str = None):
             job_id, total_saved, stop_reason or 'feed_exhausted', normalized_url,
             pool.active_count(), pool.total_count(),
         )
+        # Persist the final position so "scan for new" can pick up later.
+        stamp_last_scraped(job_id, last_productive_max_id, page_num, total_saved)
         update_job_status(job_id, 'downloading_content', clear_scrape_checkpoint=True)
 
     except RecoverableInstagramPause as exc:
         logging.warning('[InstagramScraper] [%s] PAUSED: %s', job_id, exc)
+        # Preserve the resumable checkpoint AND record last position for visibility.
+        stamp_last_scraped(job_id, max_id, page_num, total_saved)
         update_job_status(job_id, 'paused', error_message=str(exc), extra={'resume_stage': 'scraping'})
     except Exception as exc:
         logging.error('[InstagramScraper] [%s] FAILED: %s', job_id, exc, exc_info=True)
+        stamp_last_scraped(job_id, max_id, page_num, total_saved)
         update_job_status(job_id, 'failed', error_message=str(exc), extra={'resume_stage': 'scraping'})

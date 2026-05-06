@@ -64,6 +64,13 @@ def _ensure_fb_scrape_jobs_columns(cur):
         ("scrape_resume_skip_posts", "INT DEFAULT 0"),
         ("scrape_good_checkpoints", "LONGTEXT DEFAULT NULL"),
         ("scrape_last_progress_at", "DATETIME DEFAULT NULL"),
+        # Persistent record of the last cursor/page seen — preserved across
+        # job completion so "scan for new posts" can pick up where we ended.
+        ("last_scraped_cursor", "TEXT DEFAULT NULL"),
+        ("last_scraped_page_num", "INT DEFAULT 0"),
+        ("last_scraped_at", "DATETIME DEFAULT NULL"),
+        # Normalized URL used for duplicate detection. Populated lazily.
+        ("normalized_url", "VARCHAR(512) DEFAULT NULL"),
     ]
     for column_name, definition in required_columns:
         if not _column_exists(cur, "fb_scrape_jobs", column_name):
@@ -123,6 +130,10 @@ def init_db():
                     scrape_resume_skip_posts INT DEFAULT 0,
                     scrape_good_checkpoints  LONGTEXT DEFAULT NULL,
                     scrape_last_progress_at  DATETIME DEFAULT NULL,
+                    last_scraped_cursor      TEXT DEFAULT NULL,
+                    last_scraped_page_num    INT DEFAULT 0,
+                    last_scraped_at          DATETIME DEFAULT NULL,
+                    normalized_url           VARCHAR(512) DEFAULT NULL,
                     created_at               DATETIME DEFAULT CURRENT_TIMESTAMP,
                     started_scraping_at      DATETIME DEFAULT NULL,
                     scraping_completed_at    DATETIME DEFAULT NULL,
@@ -158,6 +169,14 @@ def init_db():
 
             _ensure_job_status_enum(cur)
             _ensure_fb_scrape_jobs_columns(cur)
+
+            # Index on normalized_url for fast duplicate-URL lookups.
+            cur.execute("SHOW INDEX FROM fb_scrape_jobs WHERE Key_name = 'idx_fb_jobs_normalized_url'")
+            if not cur.fetchone():
+                try:
+                    cur.execute("CREATE INDEX idx_fb_jobs_normalized_url ON fb_scrape_jobs (normalized_url)")
+                except Exception as exc:
+                    logging.warning(f"[DB] Could not add normalized_url index: {exc}")
 
         logging.info("[DB] Tables fb_scrape_jobs and fb_posts ready.")
     except Exception as exc:

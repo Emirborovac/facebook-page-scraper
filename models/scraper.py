@@ -21,6 +21,7 @@ from models.operations import (
     get_job_post_count,
     record_job_good_checkpoint,
     save_post,
+    stamp_last_scraped,
     update_job_progress,
     update_job_scrape_checkpoint,
     update_job_status,
@@ -781,6 +782,10 @@ def run_scraper(job: dict, worker_name: str = None):
 
     try:
         update_job_status(job_id, "scraping")
+        # Stamp an initial checkpoint BEFORE bootstrap so a cookie-load
+        # failure still leaves a resumable position (page 1).
+        if next_page_num <= 1 and not exact_resume:
+            update_job_scrape_checkpoint(job_id, None, 1, 0, total_saved)
 
         session, bootstrap, cookie_file = _open_cookie_context(
             pool,
@@ -1120,13 +1125,23 @@ def run_scraper(job: dict, worker_name: str = None):
             return
 
         logging.info(f"[Scraper] [{job_id}] Done — {total_saved} posts saved")
+        # Persist the final position so "scan for new" can pick up later.
+        stamp_last_scraped(job_id, next_request_cursor, next_page_num, total_saved)
         update_job_status(job_id, "downloading_content", clear_scrape_checkpoint=True)
 
     except RecoverableScrapePause as exc:
         logging.warning(f"[Scraper] [{job_id}] PAUSED: {exc}")
+        try:
+            stamp_last_scraped(job_id, next_request_cursor, next_page_num, total_saved)
+        except Exception:
+            pass
         update_job_status(job_id, "paused", error_message=str(exc), extra={"resume_stage": "scraping"})
     except Exception as exc:
         logging.error(f"[Scraper] [{job_id}] FAILED: {exc}", exc_info=True)
+        try:
+            stamp_last_scraped(job_id, next_request_cursor, next_page_num, total_saved)
+        except Exception:
+            pass
         update_job_status(job_id, "failed", error_message=str(exc), extra={"resume_stage": "scraping"})
     finally:
         if session is not None:

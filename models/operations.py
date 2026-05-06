@@ -50,15 +50,117 @@ CLAIM_RETRY_LIMIT = 20
 # Job operations
 # ──────────────────────────────────────────────────────────────────────────────
 
-def create_job(job_id: str, facebook_url: str, date_from=None, date_to=None, max_posts=None, source_category=None):
+def create_job(job_id: str, facebook_url: str, date_from=None, date_to=None, max_posts=None,
+               source_category=None, normalized_url: str = None):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO fb_scrape_jobs
-                   (job_id, facebook_url, source_category, date_from, date_to, max_posts, status, resume_stage)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'pending', 'scraping')""",
-                (job_id, facebook_url, source_category, date_from, date_to, max_posts),
+                   (job_id, facebook_url, normalized_url, source_category, date_from, date_to,
+                    max_posts, status, resume_stage)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', 'scraping')""",
+                (job_id, facebook_url, normalized_url, source_category, date_from, date_to, max_posts),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def find_jobs_by_normalized_url(normalized_url: str, limit: int = 20) -> list[dict]:
+    """Return existing jobs that target the same normalized URL.
+
+    Used by the duplicate-detection endpoint at submit time. Falls back to a
+    LIKE match on facebook_url for jobs that pre-date the normalized_url
+    column (those rows have normalized_url = NULL).
+    """
+    if not normalized_url:
+        return []
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT job_id, facebook_url, normalized_url, status, source_category,
+                          page_name, page_id, total_posts_scraped, total_media_count,
+                          total_media_downloaded, scrape_resume_page_num, scrape_resume_cursor,
+                          last_scraped_page_num, last_scraped_cursor, last_scraped_at,
+                          started_scraping_at, scraping_completed_at, completed_at, created_at,
+                          resume_stage, error_message
+                   FROM fb_scrape_jobs
+                   WHERE normalized_url = %s OR facebook_url = %s
+                   ORDER BY created_at DESC
+                   LIMIT %s""",
+                (normalized_url, normalized_url, limit),
+            )
+            return cur.fetchall() or []
+    finally:
+        conn.close()
+
+
+def get_newest_post_timestamp_for_url(normalized_url: str) -> int | None:
+    """Newest post timestamp (seconds) across all jobs for this URL.
+
+    Used by "Scan for new" — the new job will set date_from to this+1 so the
+    scraper stops as soon as it reaches a post we already have.
+    """
+    if not normalized_url:
+        return None
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT MAX(p.published_timestamp) AS newest
+                   FROM fb_posts p
+                   JOIN fb_scrape_jobs j ON j.job_id = p.job_id
+                   WHERE (j.normalized_url = %s OR j.facebook_url = %s)
+                     AND p.published_timestamp IS NOT NULL""",
+                (normalized_url, normalized_url),
+            )
+            row = cur.fetchone()
+            if not row or row.get("newest") is None:
+                return None
+            try:
+                return int(row["newest"])
+            except (TypeError, ValueError):
+                return None
+    finally:
+        conn.close()
+
+
+def backfill_normalized_url(job_id: str, normalized_url: str) -> None:
+    """Set normalized_url on a legacy job row that was missing it."""
+    if not job_id or not normalized_url:
+        return
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE fb_scrape_jobs SET normalized_url = %s WHERE job_id = %s AND (normalized_url IS NULL OR normalized_url = '')",
+                (normalized_url, job_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def stamp_last_scraped(job_id: str, cursor: str | None, page_num: int, total_posts: int = None) -> None:
+    """Persist 'last position scraped' so we can resume / scan-for-new later.
+
+    Called from the scraper at completion (and periodically during long runs).
+    Unlike scrape_resume_*, these columns are NEVER cleared on completion.
+    """
+    if not job_id:
+        return
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE fb_scrape_jobs
+                   SET last_scraped_cursor = %s,
+                       last_scraped_page_num = %s,
+                       last_scraped_at = NOW()
+                   WHERE job_id = %s""",
+                (cursor, max(int(page_num or 0), 0), job_id),
             )
         conn.commit()
     finally:

@@ -11,6 +11,7 @@ from models.operations import (
     apply_job_control_action,
     get_job_post_count,
     save_post,
+    stamp_last_scraped,
     update_job_progress,
     update_job_scrape_checkpoint,
     update_job_status,
@@ -254,6 +255,10 @@ def run_tiktok_scraper(job: dict, worker_name: str = None):
 
     try:
         update_job_status(job_id, 'scraping')
+        # Stamp an initial checkpoint so even an immediate failure leaves a
+        # resumable position. TikTok uses page_num as the cursor (offset).
+        if next_index <= 1:
+            update_job_scrape_checkpoint(job_id, None, max(next_index, 1), 0, total_saved)
         normalized_url, _ = _normalize_tiktok_account_url(account_url)
         stop_reason = None
 
@@ -347,8 +352,14 @@ def run_tiktok_scraper(job: dict, worker_name: str = None):
         logging.info(
             f'[TikTokScraper] [{job_id}] Done - {total_saved} posts saved stop_reason={stop_reason or "feed_exhausted"}'
         )
+        # Persist the final position (page index) so "scan for new" can resume.
+        stamp_last_scraped(job_id, None, next_index, total_saved)
         update_job_status(job_id, 'downloading_content', clear_scrape_checkpoint=True)
 
     except Exception as exc:
         logging.error(f'[TikTokScraper] [{job_id}] FAILED: {exc}', exc_info=True)
+        try:
+            stamp_last_scraped(job_id, None, next_index, total_saved)
+        except Exception:
+            pass
         update_job_status(job_id, 'failed', error_message=str(exc), extra={'resume_stage': 'scraping'})

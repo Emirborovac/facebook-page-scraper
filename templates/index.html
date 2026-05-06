@@ -924,6 +924,53 @@
       animation: spin 0.7s linear infinite;
       margin: 0 auto;
     }
+
+    /* ── DUPLICATE MODAL ───────────────────────────────────────────── */
+    .dup-modal-overlay {
+      position: fixed; inset: 0; background: rgba(10,10,26,0.55);
+      display: none; align-items: center; justify-content: center;
+      z-index: 200; padding: 24px;
+    }
+    .dup-modal-overlay.show { display: flex; }
+    .dup-modal {
+      background: var(--white); border-radius: 4px; max-width: 640px; width: 100%;
+      max-height: 88vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .dup-modal-head {
+      padding: 20px 24px; border-bottom: 1px solid var(--border);
+    }
+    .dup-modal-head h3 { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+    .dup-modal-head p { font-size: 12px; color: var(--muted); }
+    .dup-modal-body { padding: 16px 24px; }
+    .dup-existing { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .dup-job {
+      padding: 10px 12px; border: 1px solid var(--border); border-radius: 3px;
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      font-size: 12px;
+    }
+    .dup-job .dj-meta { color: var(--muted); font-size: 11px; }
+    .dup-job .dj-id { font-family: 'Courier New', monospace; color: var(--text); font-weight: 600; }
+    .dup-stats {
+      background: var(--bg); padding: 10px 14px; border-radius: 3px;
+      font-size: 12px; color: var(--text); margin-bottom: 16px;
+    }
+    .dup-stats strong { color: var(--pink); }
+    .dup-modal-actions {
+      padding: 16px 24px; border-top: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .dup-action-btn {
+      width: 100%; padding: 11px 16px; border: 1.5px solid var(--border); border-radius: 3px;
+      background: var(--white); color: var(--text); font-family: 'Outfit', sans-serif;
+      font-size: 13px; font-weight: 600; cursor: pointer; text-align: left;
+      display: flex; align-items: center; gap: 10px; transition: all 0.15s;
+    }
+    .dup-action-btn:hover { border-color: var(--pink); color: var(--pink); }
+    .dup-action-btn.primary { background: var(--pink); color: var(--white); border-color: var(--pink); }
+    .dup-action-btn.primary:hover { background: var(--pink-dk); border-color: var(--pink-dk); color: var(--white); }
+    .dup-action-btn.muted { color: var(--muted); }
+    .dup-action-desc { font-size: 11px; font-weight: 400; color: var(--muted); display: block; margin-top: 2px; }
+    .dup-action-btn.primary .dup-action-desc { color: rgba(255,255,255,0.85); }
   </style>
 </head>
 <body>
@@ -998,6 +1045,18 @@
     </form>
   </div>
 </nav>
+
+<!-- Duplicate-detection modal — shown when submit detects existing jobs for the same URL -->
+<div id="dup-modal" class="dup-modal-overlay" role="dialog" aria-modal="true">
+  <div class="dup-modal">
+    <div class="dup-modal-head">
+      <h3>This page has been scraped before</h3>
+      <p id="dup-modal-subtitle">We found existing jobs for this URL. What would you like to do?</p>
+    </div>
+    <div class="dup-modal-body" id="dup-modal-body"></div>
+    <div class="dup-modal-actions" id="dup-modal-actions"></div>
+  </div>
+</div>
 
 <div class="layout">
   <!-- TAB BAR -->
@@ -1510,11 +1569,22 @@
       </svg>Delete
     </button>`;
 
+    const resumeBtn = `<button type="button" class="btn-action blue" onclick="continueJob('${job.job_id}')" ${actionDisabled} title="Resume from where it stopped">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>Resume
+    </button>`;
+    const scanNewBtn = `<button type="button" class="btn-action blue" onclick="scanForNew('${job.job_id}')" ${actionDisabled} title="Create a new job that scrapes only posts newer than the last one we saved">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>Scan New
+    </button>`;
+
     if (job.status === 'pending') {
       return `<div class="action-group">${pauseBtn}${stopBtn}${deleteBtn}</div>`;
     }
     if (job.status === 'paused') {
-      return `<div class="action-group">${continueBtn}${stopBtn}${deleteBtn}</div>`;
+      return `<div class="action-group">${resumeBtn}${stopBtn}${deleteBtn}</div>`;
     }
     if (job.status === 'scraping') {
       const primary = job.can_continue && isJobStalled(job) ? continueBtn : pauseBtn;
@@ -1522,6 +1592,15 @@
     }
     if (job.status === 'downloading_content') {
       return `<div class="action-group">${pauseBtn}${stopBtn}${deleteBtn}</div>`;
+    }
+    if (job.status === 'stopped') {
+      return `<div class="action-group">${job.can_continue ? resumeBtn : ''}${deleteBtn}</div>`;
+    }
+    if (job.status === 'failed') {
+      return `<div class="action-group">${job.can_continue ? resumeBtn : ''}${deleteBtn}</div>`;
+    }
+    if (job.status === 'completed') {
+      return `<div class="action-group">${job.can_scan_new ? scanNewBtn : ''}${deleteBtn}</div>`;
     }
     return '<span style="font-size:11px;color:var(--muted)">—</span>';
   }
@@ -1857,6 +1936,40 @@
     }
   }
 
+  async function scanForNew(jobId) {
+    if (pendingActionJobIds.has(jobId)) return;
+    const job = findJob(jobId);
+    if (!job) return;
+    if (!window.confirm('Create a new scraping job for this page that stops as soon as it reaches posts you already have?')) return;
+    setJobActionPending(jobId, true);
+    try {
+      // Look up newest known timestamp via the same lookup endpoint, then submit.
+      const lookupRes = await fetch('/api/jobs/lookup?url=' + encodeURIComponent(job.facebook_url));
+      const lookup = lookupRes.ok ? await lookupRes.json() : null;
+      let dateFrom = null;
+      if (lookup && lookup.newest_post_iso) {
+        const dt = new Date(lookup.newest_post_iso);
+        dt.setUTCDate(dt.getUTCDate() + 1);
+        dateFrom = dt.toISOString().slice(0, 10);
+      }
+      const fd = new FormData();
+      fd.append('facebook_url', job.facebook_url);
+      if (dateFrom) fd.append('date_from', dateFrom);
+      if (job.source_category) fd.append('source_category', job.source_category);
+      const res = await fetch('/api/submit', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Could not start scan-for-new');
+      showToast('Scan-for-new started: ' + data.job_id.slice(0, 8) + '...');
+      await fetchJobs();
+      activateTab('processes');
+    } catch (error) {
+      window.alert(error.message || 'Could not start scan-for-new.');
+    } finally {
+      setJobActionPending(jobId, false);
+    }
+  }
+  window.scanForNew = scanForNew;
+
   async function rerunJob(jobId) {
     if (pendingActionJobIds.has(jobId)) return;
     if (!window.confirm('Send this operation back to the processing queue and run it again?')) return;
@@ -1954,12 +2067,174 @@
     document.getElementById('submit-toast').className = 'submit-toast';
   }
 
-  document.getElementById('submit-form').addEventListener('submit', async e => {
-    e.preventDefault();
+  // ── Duplicate detection helpers ──────────────────────────────────────
+  function closeDupModal() {
+    document.getElementById('dup-modal').classList.remove('show');
+  }
+  document.getElementById('dup-modal').addEventListener('click', e => {
+    if (e.target.id === 'dup-modal') closeDupModal();
+  });
+
+  function fmtDateShort(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function showDupModal(lookup, formEl) {
+    const body = document.getElementById('dup-modal-body');
+    const actions = document.getElementById('dup-modal-actions');
+    const subtitle = document.getElementById('dup-modal-subtitle');
+
+    const jobs = lookup.existing_jobs || [];
+    const newest = lookup.newest_post_iso ? fmtDateShort(lookup.newest_post_iso) : null;
+    subtitle.textContent = `We found ${jobs.length} job(s) for this URL. Choose how to proceed.`;
+
+    // List existing jobs
+    const list = jobs.slice(0, 5).map(j => `
+      <div class="dup-job">
+        <div>
+          <div class="dj-id">${j.job_id.slice(0,8)} <span style="color:var(--muted);font-weight:400">· ${j.status}</span></div>
+          <div class="dj-meta">${fmtDateShort(j.created_at)} · ${j.total_posts_scraped || 0} posts · ${j.page_name || '—'}</div>
+        </div>
+        <span class="badge badge-${j.status}"><span class="badge-dot"></span>${j.status}</span>
+      </div>`).join('');
+    const moreCount = jobs.length > 5 ? `<div style="font-size:11px;color:var(--muted);text-align:center">…and ${jobs.length - 5} older job(s)</div>` : '';
+
+    body.innerHTML = `
+      <div class="dup-existing">${list}${moreCount}</div>
+      ${newest ? `<div class="dup-stats">Newest post we have for this page: <strong>${newest}</strong></div>` : ''}
+    `;
+
+    // Build actions
+    const resumableJob = jobs.find(j => j.can_continue);
+    const completedJob = jobs.find(j => j.status === 'completed');
+    const buttons = [];
+
+    if (resumableJob) {
+      buttons.push(`
+        <button class="dup-action-btn primary" data-action="resume" data-job-id="${resumableJob.job_id}">
+          Resume incomplete job (${resumableJob.job_id.slice(0,8)})
+          <span class="dup-action-desc">Continue from where it stopped — page ${resumableJob.scrape_resume_page_num || resumableJob.last_scraped_page_num || '?'}</span>
+        </button>`);
+    }
+
+    if (newest) {
+      buttons.push(`
+        <button class="dup-action-btn ${resumableJob ? '' : 'primary'}" data-action="scan-new">
+          Scan for new posts only
+          <span class="dup-action-desc">Create a new job that stops once it reaches posts older than ${newest}</span>
+        </button>`);
+    }
+
+    buttons.push(`
+      <button class="dup-action-btn" data-action="rescrape">
+        Re-scrape everything anyway
+        <span class="dup-action-desc">Existing posts won't be re-downloaded (deduped at the database level)</span>
+      </button>`);
+
+    buttons.push(`
+      <button class="dup-action-btn muted" data-action="cancel">Cancel</button>`);
+
+    actions.innerHTML = buttons.join('');
+
+    actions.querySelectorAll('button[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const a = btn.dataset.action;
+        if (a === 'cancel') {
+          closeDupModal();
+          return;
+        }
+        if (a === 'resume') {
+          const jid = btn.dataset.jobId;
+          closeDupModal();
+          try {
+            await fetch(`/api/jobs/${jid}/continue`, { method: 'POST' });
+            showToast('Resuming job ' + jid.slice(0, 8) + '...');
+            fetchJobs();
+            setTimeout(() => activateTab('processes'), 600);
+          } catch {
+            showToast('Resume failed.', true);
+          }
+          return;
+        }
+        if (a === 'scan-new') {
+          // Create a new job with date_from = newest+1 day so the scraper bails when it hits known posts.
+          const dt = new Date(lookup.newest_post_iso);
+          dt.setUTCDate(dt.getUTCDate() + 1);
+          const dfStr = dt.toISOString().slice(0, 10);
+          const fd = new FormData(formEl);
+          fd.set('date_from', dfStr);
+          closeDupModal();
+          await actuallySubmitForm(fd);
+          return;
+        }
+        if (a === 'rescrape') {
+          closeDupModal();
+          await actuallySubmitForm(new FormData(formEl));
+          return;
+        }
+      });
+    });
+
+    document.getElementById('dup-modal').classList.add('show');
+  }
+
+  async function actuallySubmitForm(body) {
     const btn = document.getElementById('submit-btn');
     btn.disabled = true;
     btn.textContent = 'Submitting...';
-    const body = new FormData(e.target);
+    try {
+      const res = await fetch('/api/submit', { method: 'POST', body });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Page submitted. Job ID: ' + data.job_id.slice(0, 8) + '...');
+        document.getElementById('submit-form').reset();
+        fetchJobs();
+        setTimeout(() => activateTab('processes'), 800);
+      } else {
+        showToast(data.error || 'Submission failed.', true);
+      }
+    } catch {
+      showToast('Network error. Please try again.', true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+      </svg> Submit for Scraping`;
+    }
+  }
+
+  document.getElementById('submit-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const formEl = e.target;
+    const url = (formEl.querySelector('#facebook_url') || {}).value || '';
+    if (!url.trim()) return;
+
+    // Pre-flight duplicate check
+    const btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Checking...';
+    try {
+      const lookupRes = await fetch('/api/jobs/lookup?url=' + encodeURIComponent(url.trim()));
+      if (lookupRes.ok) {
+        const lookup = await lookupRes.json();
+        if (lookup && (lookup.existing_count || 0) > 0) {
+          // Show the modal — submit only happens if user picks an action
+          btn.disabled = false;
+          btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg> Submit for Scraping`;
+          showDupModal(lookup, formEl);
+          return;
+        }
+      }
+    } catch {
+      // Lookup failures shouldn't block submission — fall through.
+    }
+    // No duplicates → straight to submit
+    const body = new FormData(formEl);
     try {
       const res  = await fetch('/api/submit', { method: 'POST', body });
       const data = await res.json();

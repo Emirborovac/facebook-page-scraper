@@ -25,13 +25,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from models import cookie_admin
 from models.database import init_db
 from models.operations import (
+    backfill_normalized_url,
     continue_job as continue_job_operation,
     create_job,
+    find_jobs_by_normalized_url,
     get_all_jobs,
     get_all_posts_deduped,
     get_all_posts_for_job,
     get_all_posts_summary,
     get_job,
+    get_newest_post_timestamp_for_url,
     get_posts_for_all_jobs,
     get_posts_for_job,
     get_global_stats,
@@ -434,9 +437,12 @@ def _serialize_job(job: dict) -> dict:
     for key in ("date_from", "date_to"):
         if serialized.get(key) and hasattr(serialized[key], "isoformat"):
             serialized[key] = serialized[key].isoformat()
+    if serialized.get("last_scraped_at") and hasattr(serialized["last_scraped_at"], "isoformat"):
+        serialized["last_scraped_at"] = serialized["last_scraped_at"].isoformat()
 
     status = serialized.get("status")
     resume_page_num = int(serialized.get("scrape_resume_page_num") or 0)
+    last_scraped_page_num = int(serialized.get("last_scraped_page_num") or 0)
     total_posts = int(serialized.get("total_posts_scraped") or 0)
     total_media = int(serialized.get("total_media_count") or 0)
     resume_stage = serialized.get("resume_stage") or (
@@ -445,7 +451,13 @@ def _serialize_job(job: dict) -> dict:
         else "scraping"
     )
 
+    # Resumability rules:
+    #   - paused / stopped       → always resumable (user explicitly paused)
+    #   - scraping              → resumable if any progress was recorded
+    #   - failed                → resumable if any checkpoint OR any saved posts
+    #   - completed             → "scan for new" eligible if we have a last_scraped record
     can_continue = False
+    can_scan_new = False
     if status in {"paused", "stopped"}:
         can_continue = True
     elif status == "scraping":
@@ -457,6 +469,9 @@ def _serialize_job(job: dict) -> dict:
             or bool(total_posts)
             or bool(total_media)
         )
+    elif status == "completed":
+        # Already done — but the user can launch a fresh "scan for new" job.
+        can_scan_new = bool(serialized.get("last_scraped_at")) or bool(total_posts)
 
     if resume_stage == "downloading_content":
         continue_mode = "download" if can_continue else None
@@ -480,7 +495,9 @@ def _serialize_job(job: dict) -> dict:
     serialized["source_category"] = (serialized.get("source_category") or "").strip() or None
     serialized["resume_stage"] = resume_stage
     serialized["can_continue"] = can_continue
+    serialized["can_scan_new"] = can_scan_new
     serialized["continue_mode"] = continue_mode
+    serialized["last_scraped_page_num"] = last_scraped_page_num
     serialized["source_platform"] = _detect_source_platform(serialized.get("facebook_url") or "")
 
     # Live media download breakdown from fb_posts (may differ slightly from cached job counters)
@@ -735,9 +752,58 @@ async def submit_job(
         return JSONResponse({"success": False, "error": str(exc)}, status_code=400)
 
     job_id = str(uuid.uuid4())
-    create_job(job_id, url, date_from=df, date_to=dt, max_posts=mp, source_category=category)
+    create_job(
+        job_id, url,
+        date_from=df, date_to=dt, max_posts=mp,
+        source_category=category, normalized_url=url,
+    )
 
     return JSONResponse({"success": True, "job_id": job_id, "status": "pending"})
+
+
+@app.get("/api/jobs/lookup")
+def jobs_lookup_endpoint(request: Request, url: str = Query(...)):
+    """Duplicate-detection helper.
+
+    Given a raw URL, normalize it then return any existing jobs for the same
+    URL plus the newest post timestamp we have on file. The frontend uses this
+    BEFORE submitting a new job so it can offer Resume / Scan-for-new options.
+    """
+    require_auth(request)
+    normalized = _normalize_submit_url(url)
+    if not normalized:
+        return JSONResponse({
+            "normalized_url": None,
+            "existing_jobs": [],
+            "newest_post_timestamp": None,
+            "error": "Could not normalize URL",
+        })
+
+    rows = find_jobs_by_normalized_url(normalized)
+    # Backfill any legacy job rows that matched only via facebook_url (NULL normalized_url).
+    for row in rows:
+        if not row.get("normalized_url"):
+            try:
+                backfill_normalized_url(row["job_id"], normalized)
+                row["normalized_url"] = normalized
+            except Exception:
+                pass
+
+    serialized = [_serialize_job(row) for row in rows]
+    newest_ts = get_newest_post_timestamp_for_url(normalized)
+    newest_iso = (
+        datetime.utcfromtimestamp(int(newest_ts)).isoformat() + "Z"
+        if newest_ts else None
+    )
+
+    return JSONResponse({
+        "normalized_url": normalized,
+        "platform": _detect_source_platform(normalized),
+        "existing_jobs": serialized,
+        "existing_count": len(serialized),
+        "newest_post_timestamp": newest_ts,
+        "newest_post_iso": newest_iso,
+    })
 
 
 @app.get("/api/jobs")
