@@ -32,6 +32,7 @@ from models.operations import (
     update_job_status,
     update_post_download,
 )
+from models.cookie_pool import CookiePool
 from models.proxy import apply_download_proxy, get_download_proxy_for_ytdlp
 from models.s3_upload import delete_local_file, upload_file_to_s3
 
@@ -40,14 +41,63 @@ load_dotenv()
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "./downloads")
 FACEBOOK_COOKIE_DIR = Path(os.getenv("FACEBOOK_COOKIE_DIR", "./cookies/facebook"))
 INSTAGRAM_COOKIE_DIR = Path(os.getenv("INSTAGRAM_COOKIE_DIR", "./cookies/instagram"))
-_FB_COOKIE_LOCK = Lock()
-_FB_COOKIE_INDEX = 0
-_IG_COOKIE_LOCK = Lock()
-_IG_COOKIE_INDEX = 0
 MAX_WORKERS = int(os.getenv("DOWNLOAD_MAX_WORKERS", "5"))
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 2
 IG_DOWNLOAD_USE_COOKIES = os.getenv("IG_DOWNLOAD_USE_COOKIES", "false").strip().lower() in ("1", "true", "yes")
+
+# How many distinct cookies to try before declaring a single download "failed".
+# Each retry uses a fresh cookie + fresh datacenter proxy IP.
+INSTAGRAM_DOWNLOAD_RETRIES = max(int(os.getenv("INSTAGRAM_DOWNLOAD_RETRIES", "3")), 1)
+FACEBOOK_DOWNLOAD_RETRIES = max(int(os.getenv("FACEBOOK_DOWNLOAD_RETRIES", "3")), 1)
+DOWNLOAD_THROTTLE_COOLDOWN = float(os.getenv("DOWNLOAD_THROTTLE_COOLDOWN", "300"))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Download error classifiers (different from scraper classifiers — yt-dlp wraps
+# everything in a generic DownloadError so we look at the message)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _is_download_throttle_error(exc: Exception) -> bool:
+    """Errors that mean 'this cookie just got rate-limited, give it a cooldown'."""
+    msg = str(exc).lower()
+    return (
+        'rate-limit' in msg
+        or 'rate limit' in msg
+        or 'please wait' in msg
+        or 'too many requests' in msg
+        or 'http error 429' in msg
+        or 'status=429' in msg
+        # yt-dlp's catch-all for IG rejection — usually a throttled cookie
+        or ('not available' in msg and 'login required' in msg)
+    )
+
+
+def _is_download_burnt_error(exc: Exception) -> bool:
+    """Errors that mean 'this cookie is permanently dead — trash it'."""
+    msg = str(exc).lower()
+    return (
+        'challenge_required' in msg
+        or 'checkpoint_required' in msg
+        or 'consent_required' in msg
+        or 'http error 401' in msg
+        or 'http error 403' in msg
+        or 'status=401' in msg
+        or 'status=403' in msg
+    )
+
+
+def _is_dead_content_error(exc: Exception) -> bool:
+    """Errors where the post itself is unreachable — not a cookie problem.
+    Don't penalize the cookie or retry, just give up immediately.
+    """
+    msg = str(exc).lower()
+    return (
+        'http error 404' in msg
+        or 'no video formats found' in msg
+        or "this content isn't available to everyone" in msg
+        or 'video unavailable' in msg
+    )
 
 
 def _video_source_platform(url: str) -> str:
@@ -140,30 +190,87 @@ def _facebook_cookie_files() -> list[Path]:
     return _download_cookie_files(FACEBOOK_COOKIE_DIR)
 
 
-def _next_facebook_cookie_file() -> Path | None:
-    global _FB_COOKIE_INDEX
-    files = _facebook_cookie_files()
-    if not files:
-        return None
-    with _FB_COOKIE_LOCK:
-        path = files[_FB_COOKIE_INDEX % len(files)]
-        _FB_COOKIE_INDEX = (_FB_COOKIE_INDEX + 1) % len(files)
-    return path
-
-
 def _instagram_cookie_files() -> list[Path]:
     return _download_cookie_files(INSTAGRAM_COOKIE_DIR)
 
 
-def _next_instagram_cookie_file() -> Path | None:
-    global _IG_COOKIE_INDEX
-    files = _instagram_cookie_files()
-    if not files:
+# ──────────────────────────────────────────────────────────────────────────────
+# Smart download cookie pools (thread-safe, with cooldown + burnt detection).
+# Lazy-initialized and refreshed periodically so cookies uploaded via the
+# dashboard get picked up without a service restart.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_POOL_LOCK = Lock()
+_POOLS: dict[str, CookiePool] = {}
+_POOL_LAST_REFRESH: dict[str, float] = {}
+_POOL_REFRESH_INTERVAL = 60.0  # seconds
+
+
+def _get_download_pool(platform: str) -> CookiePool | None:
+    if platform == 'facebook':
+        files_fn = _facebook_cookie_files
+    elif platform == 'instagram':
+        files_fn = _instagram_cookie_files
+    else:
         return None
-    with _IG_COOKIE_LOCK:
-        path = files[_IG_COOKIE_INDEX % len(files)]
-        _IG_COOKIE_INDEX = (_IG_COOKIE_INDEX + 1) % len(files)
-    return path
+
+    now = time.time()
+    with _POOL_LOCK:
+        pool = _POOLS.get(platform)
+        last = _POOL_LAST_REFRESH.get(platform, 0.0)
+        if pool is None:
+            files = files_fn()
+            if not files:
+                return None
+            pool = CookiePool(
+                files,
+                is_burnt_fn=_is_download_burnt_error,
+                is_throttle_fn=_is_download_throttle_error,
+                throttle_cooldown=DOWNLOAD_THROTTLE_COOLDOWN,
+            )
+            _POOLS[platform] = pool
+            _POOL_LAST_REFRESH[platform] = now
+        elif (now - last) > _POOL_REFRESH_INTERVAL:
+            files = files_fn()
+            if files:
+                pool.replace_files(files)
+            _POOL_LAST_REFRESH[platform] = now
+    return pool
+
+
+def _next_facebook_cookie_file(current: Path | None = None) -> Path | None:
+    pool = _get_download_pool('facebook')
+    if pool is None:
+        return None
+    return pool.next(current)
+
+
+def _next_instagram_cookie_file(current: Path | None = None) -> Path | None:
+    pool = _get_download_pool('instagram')
+    if pool is None:
+        return None
+    return pool.next(current)
+
+
+def _mark_download_cookie_outcome(platform: str, cookie_file: Path | None, exc: Exception) -> str:
+    """Classify and record a download error against the cookie that handled it.
+
+    Returns 'burnt', 'throttle', 'dead_content', or 'unknown'.
+    """
+    if cookie_file is None:
+        return 'unknown'
+    if _is_dead_content_error(exc):
+        return 'dead_content'
+    pool = _get_download_pool(platform)
+    if pool is None:
+        return 'unknown'
+    if _is_download_burnt_error(exc):
+        pool.mark_burnt(cookie_file)
+        return 'burnt'
+    if _is_download_throttle_error(exc):
+        pool.mark_throttled(cookie_file)
+        return 'throttle'
+    return 'unknown'
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -176,27 +283,39 @@ MIN_IMAGE_BYTES = 500
 def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
     referer = 'https://www.instagram.com/' if platform == 'instagram' else 'https://www.facebook.com/'
     accept = '*/*' if platform == 'instagram' else 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8'
-    session = requests.Session()
-    apply_download_proxy(session)
-    if platform == 'instagram':
-        cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
-    else:
-        cookie_file = _next_facebook_cookie_file()
-    session.headers.update({
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/124.0.0.0 Safari/537.36'
-        ),
-        'Referer': referer,
-        'Accept': accept,
-    })
-    _load_cookies_into_session(session, platform=platform, cookie_file=cookie_file)
-    if cookie_file:
-        logging.debug(f'[Downloader] Using {platform} cookie file {Path(cookie_file).name} for binary download')
 
-    retries = 1 if platform == 'instagram' else MAX_RETRIES
-    for attempt in range(1, retries + 1):
+    if platform == 'tiktok':
+        max_attempts = MAX_RETRIES
+    elif platform == 'instagram':
+        max_attempts = INSTAGRAM_DOWNLOAD_RETRIES
+    else:
+        max_attempts = FACEBOOK_DOWNLOAD_RETRIES
+
+    last_cookie: Path | None = None
+    for attempt in range(1, max_attempts + 1):
+        # Fresh session per attempt → fresh datacenter IP + fresh cookie.
+        session = requests.Session()
+        apply_download_proxy(session)
+        if platform == 'instagram':
+            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+        elif platform == 'facebook':
+            cookie_file = _next_facebook_cookie_file(last_cookie)
+        else:
+            cookie_file = None
+        last_cookie = cookie_file
+
+        session.headers.update({
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/124.0.0.0 Safari/537.36'
+            ),
+            'Referer': referer,
+            'Accept': accept,
+        })
+        if cookie_file:
+            _load_cookies_into_session(session, platform=platform, cookie_file=cookie_file)
+
         try:
             response = session.get(url, stream=True, timeout=30)
             response.raise_for_status()
@@ -207,67 +326,103 @@ def _direct_binary_download(url: str, dest_path: str, platform: str) -> bool:
             size = os.path.getsize(dest_path)
             if size >= MIN_IMAGE_BYTES or platform == 'instagram':
                 return True
-            logging.warning(f'[Downloader] Binary too small ({size}B) attempt {attempt}/{retries}: {url[:80]}')
+            logging.warning(
+                f'[Downloader] Binary too small ({size}B) attempt {attempt}/{max_attempts}: {url[:80]}'
+            )
         except Exception as exc:
-            logging.warning(f'[Downloader] Binary download failed attempt {attempt}/{retries} ({url[:80]}): {exc}')
-        if attempt < retries:
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            cookie_label = cookie_file.name if cookie_file else 'no-cookie'
+            logging.warning(
+                f'[Downloader] Binary attempt {attempt}/{max_attempts} failed '
+                f'({verdict}, cookie={cookie_label}): {url[:80]} → {exc}'
+            )
+            if verdict == 'dead_content':
+                return False
+        if attempt < max_attempts:
             time.sleep(RETRY_DELAY_SEC)
-    logging.warning(f'[Downloader] Binary download gave up after {retries} attempt(s): {url[:80]}')
+
+    logging.warning(f'[Downloader] Binary download gave up after {max_attempts} attempt(s): {url[:80]}')
     return False
 
 
 def _ytdlp_image_fallback(post_link: str, dest_path: str, platform: str = 'instagram',
                           playlist_item: int | None = None) -> bool:
     """Use yt-dlp to download an image when the CDN URL has expired."""
+    referer = "https://www.instagram.com/" if platform == 'instagram' else "https://www.facebook.com/"
+
     if platform == 'instagram':
-        cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
-        referer = "https://www.instagram.com/"
+        max_attempts = INSTAGRAM_DOWNLOAD_RETRIES
+    elif platform == 'facebook':
+        max_attempts = FACEBOOK_DOWNLOAD_RETRIES
     else:
-        cookie_file = _next_facebook_cookie_file()
-        referer = "https://www.facebook.com/"
-    ydl_opts = {
-        "outtmpl": dest_path,
-        "quiet": True,
-        "no_warnings": True,
-        "socket_timeout": 30,
-        "retries": 2,
-        "skip_download": False,
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Referer": referer,
-        },
-    }
-    if cookie_file and os.path.exists(cookie_file):
-        ydl_opts["cookiefile"] = str(cookie_file)
-    dl_proxy = get_download_proxy_for_ytdlp()
-    if dl_proxy:
-        ydl_opts["proxy"] = dl_proxy
-    if playlist_item is not None:
-        ydl_opts["playlist_items"] = str(playlist_item)
+        max_attempts = MAX_RETRIES
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([post_link])
+    last_cookie: Path | None = None
+    for attempt in range(1, max_attempts + 1):
+        if platform == 'instagram':
+            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+        elif platform == 'facebook':
+            cookie_file = _next_facebook_cookie_file(last_cookie)
+        else:
+            cookie_file = None
+        last_cookie = cookie_file
 
-        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-            return True
+        ydl_opts = {
+            "outtmpl": dest_path,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "retries": 2,
+            "skip_download": False,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Referer": referer,
+            },
+        }
+        if cookie_file and os.path.exists(cookie_file):
+            ydl_opts["cookiefile"] = str(cookie_file)
+        dl_proxy = get_download_proxy_for_ytdlp()
+        if dl_proxy:
+            ydl_opts["proxy"] = dl_proxy
+        if playlist_item is not None:
+            ydl_opts["playlist_items"] = str(playlist_item)
 
-        parent = Path(dest_path).parent
-        stem = Path(dest_path).stem
-        for candidate in parent.iterdir():
-            if candidate.stem.startswith(stem) and candidate.is_file() and candidate.stat().st_size > 0:
-                os.rename(str(candidate), dest_path)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([post_link])
+
+            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
                 return True
 
-        logging.warning("[Downloader] yt-dlp image fallback produced no file for %s", post_link[:80])
-        return False
-    except Exception as exc:
-        logging.warning("[Downloader] yt-dlp image fallback failed for %s: %s", post_link[:80], exc)
-        return False
+            parent = Path(dest_path).parent
+            stem = Path(dest_path).stem
+            for candidate in parent.iterdir():
+                if candidate.stem.startswith(stem) and candidate.is_file() and candidate.stat().st_size > 0:
+                    os.rename(str(candidate), dest_path)
+                    return True
+
+            logging.warning(
+                "[Downloader] yt-dlp image fallback attempt %s/%s produced no file for %s",
+                attempt, max_attempts, post_link[:80],
+            )
+        except Exception as exc:
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            cookie_label = cookie_file.name if cookie_file else 'no-cookie'
+            logging.warning(
+                "[Downloader] Image fallback attempt %s/%s failed (%s, cookie=%s): %s",
+                attempt, max_attempts, verdict, cookie_label, str(exc)[:200],
+            )
+            if verdict == 'dead_content':
+                return False
+        if attempt < max_attempts:
+            time.sleep(RETRY_DELAY_SEC)
+
+    logging.warning(f"[Downloader] yt-dlp image fallback gave up after {max_attempts} attempt(s): {post_link[:80]}")
+    return False
 
 
 def _download_image(url: str, dest_path: str, platform: str = 'facebook',
@@ -290,44 +445,58 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
     platform = platform or _video_source_platform(url)
     referers = {"tiktok": "https://www.tiktok.com/", "instagram": "https://www.instagram.com/"}
     referer = referers.get(platform, "https://www.facebook.com/")
-    retries = 1 if platform == 'instagram' else MAX_RETRIES
-    for attempt in range(1, retries + 1):
-        try:
-            if platform == "facebook":
-                cookie_file = _next_facebook_cookie_file()
-            elif platform == "instagram":
-                cookie_file = _next_instagram_cookie_file() if IG_DOWNLOAD_USE_COOKIES else None
+
+    # Per-platform retry budget. Each attempt rotates to a fresh cookie + IP.
+    if platform == 'tiktok':
+        max_attempts = MAX_RETRIES
+    elif platform == 'instagram':
+        max_attempts = INSTAGRAM_DOWNLOAD_RETRIES
+    else:
+        max_attempts = FACEBOOK_DOWNLOAD_RETRIES
+
+    last_cookie: Path | None = None
+    for attempt in range(1, max_attempts + 1):
+        # Pick the next AVAILABLE cookie (skips ones currently cooling down).
+        if platform == 'facebook':
+            cookie_file = _next_facebook_cookie_file(last_cookie)
+        elif platform == 'instagram':
+            cookie_file = _next_instagram_cookie_file(last_cookie) if IG_DOWNLOAD_USE_COOKIES else None
+        else:
+            cookie_file = None
+        last_cookie = cookie_file
+
+        ydl_opts = {
+            "outtmpl": dest_path,
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "merge_output_format": "mp4",
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "socket_timeout": 30,
+            "retries": 3,
+            "fragment_retries": 3,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Referer": referer,
+            },
+        }
+        if platform in ("facebook", "instagram"):
+            if cookie_file and os.path.exists(cookie_file):
+                ydl_opts["cookiefile"] = str(cookie_file)
+            elif platform == 'instagram' and not IG_DOWNLOAD_USE_COOKIES:
+                pass  # IG cookies disabled by env, expected
             else:
-                cookie_file = None
-            ydl_opts = {
-                "outtmpl": dest_path,
-                "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "merge_output_format": "mp4",
-                "noplaylist": True,
-                "quiet": True,
-                "no_warnings": True,
-                "socket_timeout": 30,
-                "retries": 3,
-                "fragment_retries": 3,
-                "http_headers": {
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                    "Referer": referer,
-                },
-            }
-            if platform in ("facebook", "instagram"):
-                if cookie_file and os.path.exists(cookie_file):
-                    ydl_opts["cookiefile"] = str(cookie_file)
-                else:
-                    logging.warning("[Downloader] No %s cookie file available for yt-dlp", platform)
+                logging.warning("[Downloader] No %s cookie file available for yt-dlp", platform)
 
-            dl_proxy = get_download_proxy_for_ytdlp()
-            if dl_proxy:
-                ydl_opts["proxy"] = dl_proxy
+        dl_proxy = get_download_proxy_for_ytdlp()
+        if dl_proxy:
+            ydl_opts["proxy"] = dl_proxy
 
+        try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
 
@@ -341,16 +510,25 @@ def _download_video(url: str, dest_path: str, platform: str | None = None) -> bo
             if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
                 return True
 
-            logging.warning(f"[Downloader] Video file missing after download attempt {attempt}/{retries}: {url[:80]}")
-        except yt_dlp.utils.DownloadError as exc:
-            logging.warning(f"[Downloader] yt_dlp DownloadError attempt {attempt}/{retries} ({url[:80]}): {exc}")
-        except Exception as exc:
-            logging.warning(f"[Downloader] Video download error attempt {attempt}/{retries} ({url[:80]}): {exc}")
+            logging.warning(
+                f"[Downloader] Video file missing after attempt {attempt}/{max_attempts}: {url[:80]}"
+            )
+        except (yt_dlp.utils.DownloadError, Exception) as exc:
+            verdict = _mark_download_cookie_outcome(platform, cookie_file, exc)
+            cookie_label = cookie_file.name if cookie_file else 'no-cookie'
+            logging.warning(
+                "[Downloader] Video attempt %s/%s failed (%s, cookie=%s): %s",
+                attempt, max_attempts, verdict, cookie_label, str(exc)[:200],
+            )
+            # Dead content — no amount of cookie rotation will help. Bail early.
+            if verdict == 'dead_content':
+                logging.warning(f"[Downloader] Dead content, skipping further retries: {url[:80]}")
+                return False
 
-        if attempt < retries:
+        if attempt < max_attempts:
             time.sleep(RETRY_DELAY_SEC)
 
-    logging.warning(f"[Downloader] Video download gave up after {retries} attempt(s): {url[:80]}")
+    logging.warning(f"[Downloader] Video download gave up after {max_attempts} attempt(s): {url[:80]}")
     return False
 
 
