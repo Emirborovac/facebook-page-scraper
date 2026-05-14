@@ -451,6 +451,24 @@ def _serialize_job(job: dict) -> dict:
         else "scraping"
     )
 
+    # ── Pre-compute the reached / newest dates so the resumability checks
+    # below can use them. (Previously these fields were only set later in the
+    # function, which silently broke the early-stop detection for completed
+    # jobs — can_continue stayed False because reached_date was always None
+    # at the check point.)
+    reached_ts = serialized.get("oldest_published_timestamp")
+    try:
+        reached_ts = int(reached_ts) if reached_ts is not None else None
+    except Exception:
+        reached_ts = None
+    newest_ts = serialized.get("newest_published_timestamp")
+    try:
+        newest_ts = int(newest_ts) if newest_ts is not None else None
+    except Exception:
+        newest_ts = None
+    reached_iso = datetime.utcfromtimestamp(reached_ts).isoformat() + "Z" if reached_ts else None
+    newest_iso = datetime.utcfromtimestamp(newest_ts).isoformat() + "Z" if newest_ts else None
+
     # Resumability rules:
     #   - paused / stopped       → always resumable (user explicitly paused)
     #   - scraping              → resumable if any progress was recorded
@@ -482,7 +500,6 @@ def _serialize_job(job: dict) -> dict:
         # to pick up where it left off.
         early_stop_by_date = False
         df_iso = serialized.get("date_from")
-        reached_iso = serialized.get("reached_date")
         if df_iso and reached_iso:
             try:
                 df_dt = datetime.fromisoformat(str(df_iso))
@@ -513,22 +530,10 @@ def _serialize_job(job: dict) -> dict:
     else:
         continue_mode = None
 
-    reached_ts = serialized.get("oldest_published_timestamp")
-    try:
-        reached_ts = int(reached_ts) if reached_ts is not None else None
-    except Exception:
-        reached_ts = None
-
-    newest_ts = serialized.get("newest_published_timestamp")
-    try:
-        newest_ts = int(newest_ts) if newest_ts is not None else None
-    except Exception:
-        newest_ts = None
-
     serialized["oldest_published_timestamp"] = reached_ts
     serialized["newest_published_timestamp"] = newest_ts
-    serialized["reached_date"] = datetime.utcfromtimestamp(reached_ts).isoformat() + "Z" if reached_ts else None
-    serialized["newest_date"] = datetime.utcfromtimestamp(newest_ts).isoformat() + "Z" if newest_ts else None
+    serialized["reached_date"] = reached_iso
+    serialized["newest_date"] = newest_iso
     serialized["source_category"] = (serialized.get("source_category") or "").strip() or None
     serialized["resume_stage"] = resume_stage
     serialized["can_continue"] = can_continue
