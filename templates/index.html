@@ -1226,12 +1226,13 @@
               <th>Status</th>
               <th>Posts</th>
               <th>Media</th>
+              <th>Scraped Range</th>
               <th>Finished At</th>
               <th>Actions</th>
             </tr>
           </thead>
           <tbody id="operations-tbody">
-            <tr><td colspan="6"><div class="spinner" style="margin:32px auto"></div></td></tr>
+            <tr><td colspan="7"><div class="spinner" style="margin:32px auto"></div></td></tr>
           </tbody>
         </table>
       </div>
@@ -1656,6 +1657,61 @@
     </div>`;
   }
 
+  function scrapedRangeCell(job) {
+    // Two pieces of info side-by-side:
+    //   1. REQUESTED — the date_from / date_to the user submitted (or "all time" if open)
+    //   2. SCRAPED   — the actual newest → oldest range of posts we captured,
+    //                  plus where pagination stopped (page number / "feed end")
+    const reqFrom = job.date_from ? fmtDateOnly(job.date_from) : null;
+    const reqTo   = job.date_to   ? fmtDateOnly(job.date_to)   : null;
+    let requestedTxt;
+    if (reqFrom && reqTo)       requestedTxt = `${reqFrom} → ${reqTo}`;
+    else if (reqFrom)           requestedTxt = `from ${reqFrom}`;
+    else if (reqTo)             requestedTxt = `until ${reqTo}`;
+    else                        requestedTxt = 'all time';
+    if (job.max_posts) requestedTxt += ` · max ${Number(job.max_posts).toLocaleString('en')}`;
+
+    const newest = job.newest_date ? fmtDateOnly(job.newest_date) : null;
+    const oldest = job.reached_date ? fmtDateOnly(job.reached_date) : null;
+    let scrapedTxt;
+    if (newest && oldest) {
+      scrapedTxt = newest === oldest ? newest : `${newest} → ${oldest}`;
+    } else if (newest) {
+      scrapedTxt = newest;
+    } else if (oldest) {
+      scrapedTxt = oldest;
+    } else {
+      scrapedTxt = '—';
+    }
+
+    // Where pagination actually stopped
+    const stoppedPage =
+      job.last_scraped_page_num
+      || job.scrape_resume_page_num
+      || null;
+    let stoppedTxt = '';
+    if (stoppedPage) {
+      stoppedTxt = `page ${stoppedPage}`;
+    }
+    // Compare user's date_from (oldest they wanted) with actual oldest reached.
+    // If we never reached their requested date_from, it stopped early.
+    let earlyStopHint = '';
+    if (job.status === 'completed' && reqFrom && oldest && new Date(job.reached_date) > new Date(job.date_from)) {
+      earlyStopHint = '<span style="color:#d97706" title="Did not reach the requested date_from">⚠ early stop</span>';
+    }
+
+    const stoppedLine = (stoppedTxt || earlyStopHint)
+      ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">stopped ${stoppedTxt}${stoppedTxt && earlyStopHint ? ' · ' : ''}${earlyStopHint}</div>`
+      : '';
+
+    return `
+      <div style="font-size:11px;line-height:1.45;min-width:140px">
+        <div><span style="color:var(--muted);font-weight:600;letter-spacing:0.3px">REQUESTED</span><br/>${requestedTxt}</div>
+        <div style="margin-top:5px"><span style="color:var(--muted);font-weight:600;letter-spacing:0.3px">SCRAPED</span><br/><strong>${scrapedTxt}</strong></div>
+        ${stoppedLine}
+      </div>`;
+  }
+
   function configCell(job) {
     const parts = [];
     if (job.date_from) parts.push(`From: ${fmtDateOnly(job.date_from)}`);
@@ -1755,7 +1811,7 @@
       const msg = opsStatusFilter === 'all'
         ? '<h3>No operations yet</h3><p>Completed, stopped, and failed scrapes will appear here.</p>'
         : `<h3>No ${opsStatusFilter} operations</h3><p>No jobs with this status.</p>`;
-      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">
+      tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
         <div class="empty-state-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14,2 14,8 20,8"/>
@@ -1870,6 +1926,7 @@
         <td>${statusBadge(job.status, job.active_worker_name)}</td>
         <td><strong>${job.total_posts_scraped || 0}</strong></td>
         <td>${opsMediaCell(job)}</td>
+        <td>${scrapedRangeCell(job)}</td>
         <td style="font-size:12px;color:var(--muted)">${finishedAt}</td>
         <td>${actions}</td>
       </tr>`;

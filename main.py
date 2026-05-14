@@ -490,8 +490,16 @@ def _serialize_job(job: dict) -> dict:
     except Exception:
         reached_ts = None
 
+    newest_ts = serialized.get("newest_published_timestamp")
+    try:
+        newest_ts = int(newest_ts) if newest_ts is not None else None
+    except Exception:
+        newest_ts = None
+
     serialized["oldest_published_timestamp"] = reached_ts
+    serialized["newest_published_timestamp"] = newest_ts
     serialized["reached_date"] = datetime.utcfromtimestamp(reached_ts).isoformat() + "Z" if reached_ts else None
+    serialized["newest_date"] = datetime.utcfromtimestamp(newest_ts).isoformat() + "Z" if newest_ts else None
     serialized["source_category"] = (serialized.get("source_category") or "").strip() or None
     serialized["resume_stage"] = resume_stage
     serialized["can_continue"] = can_continue

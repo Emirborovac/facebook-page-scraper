@@ -889,6 +889,7 @@ def get_all_jobs(limit=100, offset=0):
             cur.execute(
                 """SELECT j.*,
                           (SELECT MIN(published_timestamp) FROM fb_posts WHERE job_id = j.job_id) AS oldest_published_timestamp,
+                          (SELECT MAX(published_timestamp) FROM fb_posts WHERE job_id = j.job_id) AS newest_published_timestamp,
                           (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'completed') AS download_completed_count,
                           (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'failed') AS download_failed_count,
                           (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status IN ('pending', 'downloading')) AS download_pending_count
