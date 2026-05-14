@@ -477,9 +477,13 @@ def _serialize_job(job: dict) -> dict:
         # That signals the feed wasn't actually exhausted (the scraper hit a
         # ceiling, e.g. IG's depth cutoff per session) and a Resume with the
         # preserved cursor may pull more.
+        # Accept BOTH the new last_scraped_page_num column AND the legacy
+        # scrape_resume_page_num as evidence of where the scraper stopped —
+        # so this works on databases that haven't received the new columns yet.
+        stopped_page = max(last_scraped_page_num, resume_page_num)
         df_iso = serialized.get("date_from")
         reached_iso = serialized.get("reached_date")
-        if df_iso and reached_iso and last_scraped_page_num > 0:
+        if df_iso and reached_iso and (stopped_page > 0 or total_posts > 0):
             try:
                 df_dt = datetime.fromisoformat(str(df_iso))
                 reached_dt = datetime.fromisoformat(str(reached_iso).replace("Z", ""))
@@ -487,6 +491,9 @@ def _serialize_job(job: dict) -> dict:
                     can_continue = True
             except Exception:
                 pass
+        # No date_from set but the user explicitly stopped early via a control
+        # action? We can't tell. Be conservative — only show Resume if we have
+        # an explicit early-stop signal.
 
     if resume_stage == "downloading_content":
         continue_mode = "download" if can_continue else None

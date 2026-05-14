@@ -624,9 +624,15 @@ def continue_job(job_id: str):
     # left off at, if we have it preserved.
     if status == "completed":
         stage = "scraping"
-        last_cursor = job.get("last_scraped_cursor")
+        # Prefer the new last_scraped_* columns (preserved across completion),
+        # but fall back to the legacy scrape_resume_* values which are still
+        # populated when the new columns aren't on the schema yet.
         last_page = int(job.get("last_scraped_page_num") or 0)
-        if last_page > 0 and _has_column("fb_scrape_jobs", "last_scraped_page_num"):
+        last_cursor = job.get("last_scraped_cursor")
+        if last_page <= 0:
+            last_page = int(job.get("scrape_resume_page_num") or 0)
+            last_cursor = job.get("scrape_resume_cursor") or last_cursor
+        if last_page > 0:
             # Copy the preserved position back into the active checkpoint cols.
             try:
                 conn = get_connection()
@@ -642,10 +648,19 @@ def continue_job(job_id: str):
                             (last_cursor, last_page, job_id),
                         )
                     conn.commit()
+                    logging.info(
+                        "[continue_job] Restored position for completed job %s: page=%s cursor=%s",
+                        job_id, last_page, "set" if last_cursor else "none",
+                    )
                 finally:
                     conn.close()
             except Exception as exc:
                 logging.warning("[continue_job] Could not restore last_scraped position for %s: %s", job_id, exc)
+        else:
+            logging.warning(
+                "[continue_job] Resuming completed job %s with no preserved checkpoint — will restart from page 1",
+                job_id,
+            )
 
     target_status = "downloading_content" if stage == "downloading_content" else "pending"
     update_job_status(
