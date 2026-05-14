@@ -1274,11 +1274,15 @@ def claim_next_pending_job(platform: str = FACEBOOK_PLATFORM, worker_name: str =
 def claim_next_downloading_job(worker_name: str = None):
     """Claim the oldest job in downloading_content (legacy — used when no per-lane assignment).
 
-    Tolerant of missing assigned_download_worker / active_worker_name columns.
+    Tolerant of missing assigned_download_worker column.
+
+    Note: this does NOT update active_worker_name — that field is reserved for
+    the scraping worker. The UI derives the active download worker from the
+    job's assigned_download_worker column (or from the scraping worker name
+    plus the download lane convention).
     """
     cols = _table_columns("fb_scrape_jobs")
     has_assigned = (not cols) or "assigned_download_worker" in cols
-    has_name = (not cols) or "active_worker_name" in cols
 
     where_extra = " AND assigned_download_worker IS NULL" if has_assigned else ""
     conn = get_connection()
@@ -1293,12 +1297,6 @@ def claim_next_downloading_job(worker_name: str = None):
             if not row:
                 conn.rollback()
                 return None
-            if worker_name and has_name:
-                cur.execute(
-                    "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
-                    (worker_name, row["job_id"]),
-                )
-                row["active_worker_name"] = worker_name
             conn.commit()
             return row
     except Exception:
@@ -1321,7 +1319,6 @@ def claim_download_job_for_worker(download_worker_name: str, batch_trigger: int 
     """
     cols = _table_columns("fb_scrape_jobs")
     has_assigned = (not cols) or "assigned_download_worker" in cols
-    has_name = (not cols) or "active_worker_name" in cols
     if not has_assigned:
         return None
 
@@ -1353,12 +1350,10 @@ def claim_download_job_for_worker(download_worker_name: str, batch_trigger: int 
             if not row:
                 conn.rollback()
                 return None
-            if has_name:
-                cur.execute(
-                    "UPDATE fb_scrape_jobs SET active_worker_name = %s WHERE job_id = %s",
-                    (download_worker_name, row["job_id"]),
-                )
-                row["active_worker_name"] = download_worker_name
+            # Do NOT touch active_worker_name here — that column is reserved for
+            # the scraping worker (otherwise the download worker would
+            # overwrite the scraping worker's name during drip-feed and the
+            # UI would lose track of who's actually scraping).
             conn.commit()
             return row
     except Exception:

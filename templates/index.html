@@ -609,6 +609,8 @@
       text-transform: lowercase; font-family: 'Outfit', sans-serif;
       vertical-align: middle;
     }
+    .worker-chip-scrape   { background: var(--pink); color: #fff; }
+    .worker-chip-download { background: var(--black); color: #fff; }
     .badge-scraping   { background: #FCE7F3; color: #EC4899; }
     .badge-scraping .badge-dot {
       background: #EC4899;
@@ -1356,7 +1358,7 @@
     } catch { return iso; }
   }
 
-  function statusBadge(status, workerName) {
+  function statusBadge(status, jobOrWorkerName) {
     const labels = {
       pending: 'Pending',
       paused: 'Paused',
@@ -1367,12 +1369,43 @@
       failed: 'Failed',
     };
     const badge = `<span class="badge badge-${status}"><span class="badge-dot"></span>${labels[status] || status}</span>`;
-    const isActive = status === 'scraping' || status === 'downloading_content';
-    if (isActive && workerName) {
-      const safe = String(workerName).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      return badge + ` <span class="worker-chip" title="Worker handling this job">${safe}</span>`;
+
+    // Backward-compat: callers pass either the full job object (preferred) or
+    // a bare worker name string. The two-chip rendering needs the full job.
+    const isJob = jobOrWorkerName && typeof jobOrWorkerName === 'object';
+    const job = isJob ? jobOrWorkerName : null;
+    const workerName = isJob ? job.active_worker_name : jobOrWorkerName;
+    const dlPending = job ? Number(job.download_pending_count || 0) : 0;
+    const downloadName = job ? job.assigned_download_worker : null;
+
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const chips = [];
+
+    // Scraping worker chip — show whenever the job is actively scraping or
+    // sitting in pending/paused mid-flow with a recorded scraper.
+    if ((status === 'scraping' || status === 'pending') && workerName) {
+      chips.push(`<span class="worker-chip worker-chip-scrape" title="Scraping worker">${esc(workerName)}</span>`);
     }
-    return badge;
+
+    // Download worker chip — shown when downloads are happening or pending
+    // for this job. During drip-feed mode (status='scraping' with pending
+    // downloads) BOTH chips appear so it's obvious both are in flight.
+    const showDownloadChip = downloadName && (
+      status === 'downloading_content'
+      || (status === 'scraping' && dlPending > 0)
+    );
+    if (showDownloadChip) {
+      chips.push(`<span class="worker-chip worker-chip-download" title="Download worker">${esc(downloadName)}</span>`);
+    }
+    // Fallback for the legacy downloader (no per-lane assignment): if the
+    // job is in downloading_content with NO assigned_download_worker, show
+    // a generic "download-legacy" chip so the user still knows a worker is
+    // on it.
+    if (!showDownloadChip && status === 'downloading_content' && !downloadName) {
+      chips.push(`<span class="worker-chip worker-chip-download" title="Legacy download sweeper">download-legacy</span>`);
+    }
+
+    return chips.length ? badge + ' ' + chips.join(' ') : badge;
   }
 
   function persistOpsVisible() {
@@ -1781,7 +1814,7 @@
           <a href="${job.facebook_url}" target="_blank" rel="noopener">${job.page_name || job.facebook_url}</a>
           <div style="font-size:10px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:260px">${job.facebook_url}</div>
         </td>
-        <td>${statusBadge(job.status, job.active_worker_name)}</td>
+        <td>${statusBadge(job.status, job)}</td>
         <td>${progressCell(job)}</td>
         <td>${mediaCell(job)}</td>
         <td style="font-size:12px;color:var(--muted)">${fmtDateOnly(job.reached_date)}</td>
@@ -1923,7 +1956,7 @@
           <div style="font-size:10px;color:var(--muted);margin-top:2px">${job.job_id.slice(0,8)}...</div>
           ${errorTip}
         </td>
-        <td>${statusBadge(job.status, job.active_worker_name)}</td>
+        <td>${statusBadge(job.status, job)}</td>
         <td><strong>${job.total_posts_scraped || 0}</strong></td>
         <td>${opsMediaCell(job)}</td>
         <td>${scrapedRangeCell(job)}</td>
