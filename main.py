@@ -472,6 +472,21 @@ def _serialize_job(job: dict) -> dict:
     elif status == "completed":
         # Already done — but the user can launch a fresh "scan for new" job.
         can_scan_new = bool(serialized.get("last_scraped_at")) or bool(total_posts)
+        # Resume is also possible if the scraper stopped early — i.e. the
+        # oldest post we got is NEWER than the user's requested date_from.
+        # That signals the feed wasn't actually exhausted (the scraper hit a
+        # ceiling, e.g. IG's depth cutoff per session) and a Resume with the
+        # preserved cursor may pull more.
+        df_iso = serialized.get("date_from")
+        reached_iso = serialized.get("reached_date")
+        if df_iso and reached_iso and last_scraped_page_num > 0:
+            try:
+                df_dt = datetime.fromisoformat(str(df_iso))
+                reached_dt = datetime.fromisoformat(str(reached_iso).replace("Z", ""))
+                if reached_dt > df_dt:
+                    can_continue = True
+            except Exception:
+                pass
 
     if resume_stage == "downloading_content":
         continue_mode = "download" if can_continue else None

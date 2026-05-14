@@ -603,14 +603,49 @@ def request_job_delete(job_id: str):
 
 
 def continue_job(job_id: str):
+    """Move a job back into the workable queue from a paused/stopped/failed/completed state.
+
+    For ``completed`` jobs this is the "early-stop resume" path — when scraping
+    finished (or thought it finished) but did not reach the user's requested
+    date_from, the cursor was cleared from scrape_resume_* but preserved in
+    last_scraped_*. Copy it back so the worker picks up where it left off.
+    """
     job = get_job(job_id)
     if not job:
         return None
 
     status = job["status"]
     stage = job.get("resume_stage") or "scraping"
-    if status not in {"paused", "stopped", "failed", "scraping"}:
-        raise ValueError("Only paused, stopped, failed, or interrupted jobs can be continued")
+    if status not in {"paused", "stopped", "failed", "scraping", "completed"}:
+        raise ValueError("Only paused, stopped, failed, completed, or interrupted jobs can be continued")
+
+    # For completed jobs we always resume scraping (downloads of new posts will
+    # follow naturally once they're saved). Restore the position the scraper
+    # left off at, if we have it preserved.
+    if status == "completed":
+        stage = "scraping"
+        last_cursor = job.get("last_scraped_cursor")
+        last_page = int(job.get("last_scraped_page_num") or 0)
+        if last_page > 0 and _has_column("fb_scrape_jobs", "last_scraped_page_num"):
+            # Copy the preserved position back into the active checkpoint cols.
+            try:
+                conn = get_connection()
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """UPDATE fb_scrape_jobs
+                               SET scrape_resume_cursor = %s,
+                                   scrape_resume_page_num = %s,
+                                   scrape_resume_skip_posts = 0,
+                                   scraping_completed_at = NULL
+                               WHERE job_id = %s""",
+                            (last_cursor, last_page, job_id),
+                        )
+                    conn.commit()
+                finally:
+                    conn.close()
+            except Exception as exc:
+                logging.warning("[continue_job] Could not restore last_scraped position for %s: %s", job_id, exc)
 
     target_status = "downloading_content" if stage == "downloading_content" else "pending"
     update_job_status(
