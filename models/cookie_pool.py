@@ -189,8 +189,11 @@ class CookiePool:
         if self._is_throttle(exc):
             self.mark_throttled(cookie_file)
             return 'throttle'
-        # Unknown errors: short cooldown, not permanent
-        self.mark_throttled(cookie_file, cooldown_seconds=60)
+        # Unknown errors: minimal cooldown so the cookie comes back fast.
+        # The previous 60s default was too punishing for transient blips
+        # (empty responses, network glitches, etc.) where the cookie is
+        # almost certainly fine.
+        self.mark_throttled(cookie_file, cooldown_seconds=15)
         return 'unknown'
 
     def has_active(self) -> bool:

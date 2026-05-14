@@ -939,7 +939,15 @@ def run_scraper(job: dict, worker_name: str = None):
                         time.sleep(REQUEST_DELAY * 2)
                         rotate_cookie(f"GraphQL error: {gql_exc}", request_cursor, current_page_num, page_skip_posts)
             if not data:
-                rotate_cookie("empty GraphQL response", request_cursor, current_page_num, page_skip_posts)
+                # An empty GraphQL response is NOT proof that the cookie is
+                # throttled — Facebook returns empty payloads for many reasons
+                # (cursor expiry, load balancer hiccup, transient feed glitch).
+                # Rotate to another cookie to give it a fresh shot, but DON'T
+                # mark the previous cookie as throttled. If it actually IS
+                # throttled, the next real request on it will return a 429
+                # which the proper classifier will catch.
+                rotate_cookie("empty GraphQL response", request_cursor, current_page_num, page_skip_posts,
+                              mark_failed=False)
                 time.sleep(REQUEST_DELAY)
                 continue
 
