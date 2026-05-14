@@ -472,28 +472,35 @@ def _serialize_job(job: dict) -> dict:
     elif status == "completed":
         # Already done — but the user can launch a fresh "scan for new" job.
         can_scan_new = bool(serialized.get("last_scraped_at")) or bool(total_posts)
-        # Resume is also possible if the scraper stopped early — i.e. the
-        # oldest post we got is NEWER than the user's requested date_from.
-        # That signals the feed wasn't actually exhausted (the scraper hit a
-        # ceiling, e.g. IG's depth cutoff per session) and a Resume with the
-        # preserved cursor may pull more.
-        # Accept BOTH the new last_scraped_page_num column AND the legacy
-        # scrape_resume_page_num as evidence of where the scraper stopped —
-        # so this works on databases that haven't received the new columns yet.
-        stopped_page = max(last_scraped_page_num, resume_page_num)
+        # Resume is also possible if the scraper stopped early — i.e. it
+        # didn't actually fulfill what the user asked for. Two signals:
+        #   1. User asked for date_from=X but reached_date is NEWER than X
+        #      (the scraper hit a depth ceiling before reaching that date)
+        #   2. User asked for max_posts=N but only got fewer posts
+        # If either holds, expose the Continue button. The worker will use
+        # last_scraped_* (new column) or scrape_resume_* (legacy fallback)
+        # to pick up where it left off.
+        early_stop_by_date = False
         df_iso = serialized.get("date_from")
         reached_iso = serialized.get("reached_date")
-        if df_iso and reached_iso and (stopped_page > 0 or total_posts > 0):
+        if df_iso and reached_iso:
             try:
                 df_dt = datetime.fromisoformat(str(df_iso))
                 reached_dt = datetime.fromisoformat(str(reached_iso).replace("Z", ""))
                 if reached_dt > df_dt:
-                    can_continue = True
+                    early_stop_by_date = True
             except Exception:
                 pass
-        # No date_from set but the user explicitly stopped early via a control
-        # action? We can't tell. Be conservative — only show Resume if we have
-        # an explicit early-stop signal.
+        early_stop_by_count = False
+        max_posts_val = serialized.get("max_posts")
+        if max_posts_val:
+            try:
+                if total_posts < int(max_posts_val):
+                    early_stop_by_count = True
+            except (TypeError, ValueError):
+                pass
+        if early_stop_by_date or early_stop_by_count:
+            can_continue = True
 
     if resume_stage == "downloading_content":
         continue_mode = "download" if can_continue else None
