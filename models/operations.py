@@ -1443,9 +1443,13 @@ def update_job_status(
             values.append(error_message)
 
         if clear_scrape_checkpoint:
+            # NOTE: deliberately keep scrape_resume_cursor + scrape_resume_page_num
+            # populated on completion. They act as the "last position scraped"
+            # fallback when the optional last_scraped_* columns don't exist on
+            # the schema (and even when they do, this gives Continue a working
+            # path with zero extra DB cost). Clearing them used to be tidiness
+            # only — it now actively breaks Continue-on-completed.
             fields.extend([
-                "scrape_resume_cursor = NULL",
-                "scrape_resume_page_num = 0",
                 "scrape_resume_skip_posts = 0",
                 "scrape_good_checkpoints = NULL",
             ])
