@@ -858,13 +858,19 @@ def download_job_media(job: dict, worker_name: str | None = None, concurrency: i
                 else:
                     progress = get_download_progress(job_id)
                     update_job_progress(job_id, total_media_count=progress["total"], total_media_downloaded=progress["completed"])
-                    if progress["failed"] or progress["remaining"]:
+                    if progress["remaining"]:
+                        # Real unfinished work — mark failed so the user can retry.
                         msg = f"Media incomplete: completed={progress['completed']} failed={progress['failed']} remaining={progress['remaining']}"
                         update_job_status(job_id, "failed", error_message=msg, extra={"resume_stage": "downloading_content"})
                         logging.warning(f"[Downloader:{label}] [{job_id}] {msg}")
                     else:
+                        # Nothing pending. Old failures don't make this run a failure
+                        # — the user can click "Retry Downloads" to attempt them.
                         update_job_status(job_id, "completed")
-                        logging.info(f"[Downloader:{label}] [{job_id}] Nothing left to download")
+                        if progress["failed"]:
+                            logging.info(f"[Downloader:{label}] [{job_id}] All available downloads done ({progress['completed']} ok, {progress['failed']} previously failed and not retried) — marking completed")
+                        else:
+                            logging.info(f"[Downloader:{label}] [{job_id}] Nothing left to download")
                     return
 
             while in_flight:
@@ -910,10 +916,17 @@ def download_job_media(job: dict, worker_name: str | None = None, concurrency: i
             )
             return
 
-        if progress["failed"] or progress["remaining"]:
+        if progress["remaining"]:
+            # Real unfinished work — mark failed so the user can retry.
             msg = f"Media incomplete: completed={progress['completed']} failed={progress['failed']} remaining={progress['remaining']}"
             update_job_status(job_id, "failed", error_message=msg, extra={"resume_stage": "downloading_content"})
             logging.warning(f"[Downloader:{label}] [{job_id}] {msg}")
+        elif progress["failed"]:
+            # Some old failures, but nothing pending — mark completed so
+            # clicking Continue doesn't infinite-loop the job through 'failed'.
+            # User can click Retry Downloads to attempt the failed ones again.
+            update_job_status(job_id, "completed")
+            logging.info(f"[Downloader:{label}] [{job_id}] All downloads done ({progress['completed']} ok, {progress['failed']} previously failed and not retried) — marking completed")
         else:
             update_job_status(job_id, "completed")
             logging.info(f"[Downloader:{label}] [{job_id}] All downloads complete ({progress['completed']}/{progress['total']})")
