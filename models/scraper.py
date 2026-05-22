@@ -120,8 +120,10 @@ def _is_burnt_cookie_error(exc: Exception) -> bool:
     return (
         'could not extract userid' in message
         or 'no facebook cookies loaded' in message
-        or 'checkpoint' in message
+        or 'checkpoint' in message            # account security-locked by FB
         or 'login_required' in message
+        or 'login redirect' in message        # cookie expired / logged out
+        or 'not logged in' in message
         or 'status=401' in message
         or 'status=403' in message
         or 'this content isn' in message  # "this content isn't available right now"
@@ -142,6 +144,29 @@ def _open_one_session(cookie_file: Path, target_page: str, worker_name: str | No
             raise RuntimeError(f"No Facebook cookies loaded from {_cookie_label(cookie_file)}")
 
         resp = session.get(target_page, headers=GET_HEADERS, timeout=30)
+
+        # Inspect the FINAL url after redirects FIRST. A checkpointed or
+        # logged-out account gets 302-bounced to /checkpoint/ or /login/.
+        # Those pages can come back as either 200 or 4xx, so the status code
+        # alone isn't reliable — the redirected URL is. These errors carry
+        # wording the burnt-cookie classifier recognises, so the cookie gets
+        # moved to cookie_trash/ instead of being retried forever.
+        final_url = (getattr(resp, "url", "") or "").lower()
+        if "/checkpoint" in final_url:
+            raise RuntimeError(
+                f"Account checkpointed by Facebook — security lock "
+                f"(cookie {_cookie_label(cookie_file)}); redirected to {final_url[:120]}"
+            )
+        if (
+            "/login/" in final_url
+            or final_url.rstrip("/").endswith("/login")
+            or "login.php" in final_url
+        ):
+            raise RuntimeError(
+                f"Cookie not logged in — login redirect "
+                f"(cookie {_cookie_label(cookie_file)}); redirected to {final_url[:120]}"
+            )
+
         if resp.status_code != 200:
             raise RuntimeError(
                 f"Page GET failed with {_cookie_label(cookie_file)}: status={resp.status_code}"
@@ -169,7 +194,10 @@ def _open_cookie_context(
 ):
     """Round-robin through pool until a working cookie opens. Marks failures."""
     if not pool.has_active():
-        raise RecoverableScrapePause("All Facebook cookie sessions are burnt")
+        raise RecoverableScrapePause(
+            "All Facebook accounts for this worker are burnt (checkpointed / logged out). "
+            "Upload fresh cookies via the Cookies tab and resume."
+        )
 
     last_error = None
     tried: set[str] = set()
@@ -210,6 +238,13 @@ def _open_cookie_context(
             last_error = str(exc)
             pool.classify_and_mark(waited_file, exc)
 
+    last = (last_error or "unknown").lower()
+    if "checkpoint" in last:
+        raise RecoverableScrapePause(
+            f"All Facebook accounts are checkpointed (security-locked by Facebook) — "
+            f"they need to be replaced. Burnt cookies moved to cookie_trash/. "
+            f"Last error during {reason}: {last_error}"
+        )
     raise RecoverableScrapePause(
         f"All assigned cookies exhausted during {reason}. Last error: {last_error or 'unknown'}"
     )
