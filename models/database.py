@@ -326,6 +326,27 @@ def init_db():
                 except Exception as exc:
                     logging.warning(f"[DB] Could not add normalized_url index: {exc}")
 
+            # Compound index for the dashboard's hot path. get_all_jobs runs a
+            # GROUP BY job_id with SUM(CASE WHEN download_status = ...) over the
+            # entire fb_posts table on every poll; with this index MySQL can
+            # service those aggregates purely from the index without touching
+            # row data — a big win once fb_posts is millions of rows.
+            cur.execute("SHOW INDEX FROM fb_posts WHERE Key_name = 'idx_fb_posts_job_status'")
+            if not cur.fetchone():
+                try:
+                    cur.execute("CREATE INDEX idx_fb_posts_job_status ON fb_posts (job_id, download_status)")
+                except Exception as exc:
+                    logging.warning(f"[DB] Could not add job_id+download_status index: {exc}")
+
+            # Compound index for the MIN/MAX(published_timestamp) per job_id
+            # subquery used on every dashboard refresh.
+            cur.execute("SHOW INDEX FROM fb_posts WHERE Key_name = 'idx_fb_posts_job_ts'")
+            if not cur.fetchone():
+                try:
+                    cur.execute("CREATE INDEX idx_fb_posts_job_ts ON fb_posts (job_id, published_timestamp)")
+                except Exception as exc:
+                    logging.warning(f"[DB] Could not add job_id+published_timestamp index: {exc}")
+
             # Detect which optional columns made it onto the table. The schema-
             # tolerant cursor uses this list to silently strip references to
             # missing columns from later UPDATE/INSERT statements.

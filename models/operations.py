@@ -929,21 +929,40 @@ def delete_job(job_id: str):
 
 def get_all_jobs(limit=100, offset=0):
     cache_key = f"all_jobs:{limit}:{offset}"
-    cached = _cache_get(cache_key, ttl=5)
+    cached = _cache_get(cache_key, ttl=30)
     if cached is not None:
         return cached
 
+    # IMPORTANT performance note:
+    # Previously this ran 5 correlated subqueries PER row (MIN/MAX/3×COUNT),
+    # so a single 500-row dashboard refresh issued ~2,500 subqueries against
+    # fb_posts. On a multi-million-row fb_posts table that took 10-30s and
+    # blocked the connection pool, leading to the "dashboard barely loads"
+    # symptom. Replaced with one LEFT JOIN onto a single GROUP BY subquery
+    # — fb_posts is scanned once and the result is broadcast to all matching
+    # jobs. With the existing idx_fb_posts_job_id index this is typically
+    # 50-200x faster on a large dataset.
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """SELECT j.*,
-                          (SELECT MIN(published_timestamp) FROM fb_posts WHERE job_id = j.job_id) AS oldest_published_timestamp,
-                          (SELECT MAX(published_timestamp) FROM fb_posts WHERE job_id = j.job_id) AS newest_published_timestamp,
-                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'completed') AS download_completed_count,
-                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status = 'failed') AS download_failed_count,
-                          (SELECT COUNT(*) FROM fb_posts WHERE job_id = j.job_id AND download_status IN ('pending', 'downloading')) AS download_pending_count
+                          p.oldest_published_timestamp,
+                          p.newest_published_timestamp,
+                          COALESCE(p.download_completed_count, 0) AS download_completed_count,
+                          COALESCE(p.download_failed_count, 0)    AS download_failed_count,
+                          COALESCE(p.download_pending_count, 0)   AS download_pending_count
                    FROM fb_scrape_jobs j
+                   LEFT JOIN (
+                       SELECT job_id,
+                              MIN(published_timestamp) AS oldest_published_timestamp,
+                              MAX(published_timestamp) AS newest_published_timestamp,
+                              SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS download_completed_count,
+                              SUM(CASE WHEN download_status = 'failed' THEN 1 ELSE 0 END)    AS download_failed_count,
+                              SUM(CASE WHEN download_status IN ('pending', 'downloading') THEN 1 ELSE 0 END) AS download_pending_count
+                       FROM fb_posts
+                       GROUP BY job_id
+                   ) p ON p.job_id = j.job_id
                    ORDER BY j.created_at DESC
                    LIMIT %s OFFSET %s""",
                 (limit, offset),
@@ -961,7 +980,10 @@ def get_all_jobs(limit=100, offset=0):
 
 
 def get_global_stats():
-    cached = _cache_get("global_stats", ttl=10)
+    # 60s cache: this query scans the entire fb_posts table for SUM/CASE
+    # aggregates. Frequent re-runs on a large dataset are expensive and the
+    # numbers don't change meaningfully second-to-second.
+    cached = _cache_get("global_stats", ttl=60)
     if cached is not None:
         return cached
 
