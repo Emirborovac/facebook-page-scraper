@@ -1798,7 +1798,10 @@
     const dot = document.getElementById('refresh-dot');
     dot && dot.classList.add('refreshing');
     try {
-      const res = await fetch('/api/jobs?limit=500');
+      // 200 is plenty — the operations table paginates via loadMoreOps()
+      // and active jobs are usually <20. Fetching 500 every poll bloated
+      // the response with rarely-viewed old jobs.
+      const res = await fetch('/api/jobs?limit=200');
       const data = await res.json();
       if (!data.success) return;
 
@@ -2413,8 +2416,11 @@
 
   fetchJobs();
   fetchGlobalStats();
-  setInterval(fetchJobs, 5000);
-  setInterval(fetchGlobalStats, 30000);
+  // Poll every 10s instead of 5s — backend query is still the bottleneck
+  // on a large DB, and 5s polling caused requests to stack up. 10s feels
+  // identical for human eyes and halves the DB load.
+  setInterval(fetchJobs, 10000);
+  setInterval(fetchGlobalStats, 60000);
 </script>
 </body>
 </html>

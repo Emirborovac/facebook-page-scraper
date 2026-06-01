@@ -929,40 +929,28 @@ def delete_job(job_id: str):
 
 def get_all_jobs(limit=100, offset=0):
     cache_key = f"all_jobs:{limit}:{offset}"
-    cached = _cache_get(cache_key, ttl=30)
+    cached = _cache_get(cache_key, ttl=60)
     if cached is not None:
         return cached
 
-    # IMPORTANT performance note:
-    # Previously this ran 5 correlated subqueries PER row (MIN/MAX/3×COUNT),
-    # so a single 500-row dashboard refresh issued ~2,500 subqueries against
-    # fb_posts. On a multi-million-row fb_posts table that took 10-30s and
-    # blocked the connection pool, leading to the "dashboard barely loads"
-    # symptom. Replaced with one LEFT JOIN onto a single GROUP BY subquery
-    # — fb_posts is scanned once and the result is broadcast to all matching
-    # jobs. With the existing idx_fb_posts_job_id index this is typically
-    # 50-200x faster on a large dataset.
+    # Performance: NO fb_posts join here. The dashboard polls this endpoint
+    # every 5s — if it joins a multi-million-row fb_posts table, the dashboard
+    # crawls (or times out entirely) regardless of caching, because the cache
+    # has to be repopulated eventually and the user is stuck waiting when it
+    # does. Instead we rely on the denormalized counters already on
+    # fb_scrape_jobs (total_posts_scraped, total_media_count,
+    # total_media_downloaded) that the scraper + downloader keep updated as
+    # work happens. The dashboard's media cell already falls back to these
+    # values when the per-status counts are missing (??), so the UX is the
+    # same minus the live failed/pending split in the list view — which the
+    # user can still see by opening the job's detail page (get_job DOES join
+    # fb_posts, but only for one job at a time).
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT j.*,
-                          p.oldest_published_timestamp,
-                          p.newest_published_timestamp,
-                          COALESCE(p.download_completed_count, 0) AS download_completed_count,
-                          COALESCE(p.download_failed_count, 0)    AS download_failed_count,
-                          COALESCE(p.download_pending_count, 0)   AS download_pending_count
+                """SELECT j.*
                    FROM fb_scrape_jobs j
-                   LEFT JOIN (
-                       SELECT job_id,
-                              MIN(published_timestamp) AS oldest_published_timestamp,
-                              MAX(published_timestamp) AS newest_published_timestamp,
-                              SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS download_completed_count,
-                              SUM(CASE WHEN download_status = 'failed' THEN 1 ELSE 0 END)    AS download_failed_count,
-                              SUM(CASE WHEN download_status IN ('pending', 'downloading') THEN 1 ELSE 0 END) AS download_pending_count
-                       FROM fb_posts
-                       GROUP BY job_id
-                   ) p ON p.job_id = j.job_id
                    ORDER BY j.created_at DESC
                    LIMIT %s OFFSET %s""",
                 (limit, offset),
