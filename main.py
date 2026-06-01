@@ -542,12 +542,32 @@ def _serialize_job(job: dict) -> dict:
     serialized["last_scraped_page_num"] = last_scraped_page_num
     serialized["source_platform"] = _detect_source_platform(serialized.get("facebook_url") or "")
 
-    # Live media download breakdown from fb_posts (may differ slightly from cached job counters)
-    dc = int(serialized.get("download_completed_count") or 0)
-    df = int(serialized.get("download_failed_count") or 0)
-    dp = int(serialized.get("download_pending_count") or 0)
-    sum_status = dc + df + dp
+    # Live media download breakdown from fb_posts (may differ slightly from cached job counters).
+    # When the source row didn't include the per-status counts (the dashboard
+    # list query skips them for performance), fall back to the denormalized
+    # counters that the worker keeps current on the job row itself. Without
+    # this, the dashboard shows "0 / N saved" for jobs that actually have
+    # downloads — the JS uses ?? which only fires on null/undefined and not
+    # on a zero coming from the server.
     tm_job = int(serialized.get("total_media_count") or 0)
+    total_dl_job = int(serialized.get("total_media_downloaded") or 0)
+    has_join_stats = (
+        "download_completed_count" in serialized
+        or "download_failed_count" in serialized
+        or "download_pending_count" in serialized
+    )
+    if has_join_stats:
+        dc = int(serialized.get("download_completed_count") or 0)
+        df = int(serialized.get("download_failed_count") or 0)
+        dp = int(serialized.get("download_pending_count") or 0)
+    else:
+        # No JOIN data → reconstruct from the job's own counters. We know the
+        # completed count exactly (total_media_downloaded). We don't know the
+        # failed/pending split, so we treat the gap as pending.
+        dc = total_dl_job
+        df = 0
+        dp = max(tm_job - total_dl_job, 0)
+    sum_status = dc + df + dp
     serialized["media_download_total"] = max(tm_job, sum_status) if sum_status else tm_job
     serialized["download_completed_count"] = dc
     serialized["download_failed_count"] = df

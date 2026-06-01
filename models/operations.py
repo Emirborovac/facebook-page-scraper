@@ -933,24 +933,32 @@ def get_all_jobs(limit=100, offset=0):
     if cached is not None:
         return cached
 
-    # Performance: NO fb_posts join here. The dashboard polls this endpoint
-    # every 5s — if it joins a multi-million-row fb_posts table, the dashboard
-    # crawls (or times out entirely) regardless of caching, because the cache
-    # has to be repopulated eventually and the user is stuck waiting when it
-    # does. Instead we rely on the denormalized counters already on
-    # fb_scrape_jobs (total_posts_scraped, total_media_count,
-    # total_media_downloaded) that the scraper + downloader keep updated as
-    # work happens. The dashboard's media cell already falls back to these
-    # values when the per-status counts are missing (??), so the UX is the
-    # same minus the live failed/pending split in the list view — which the
-    # user can still see by opening the job's detail page (get_job DOES join
-    # fb_posts, but only for one job at a time).
+    # Performance: we deliberately keep the fb_posts JOIN narrow — only
+    # MIN/MAX(published_timestamp) per job, NO per-status COUNT/SUM. The
+    # MIN/MAX aggregates are cheap (and become near-instant with the
+    # idx_fb_posts_job_ts index if it exists), while the per-status counts
+    # were the actual disaster — they had to read every row's
+    # download_status. We drop those entirely and rely on the denormalized
+    # job-level counters (total_media_count, total_media_downloaded) that
+    # the worker keeps current. _serialize_job reconstructs the per-status
+    # split from those. The per-job detail endpoint (get_job) still does
+    # the full JOIN so the gallery view shows accurate failed/pending
+    # numbers.
     conn = get_connection()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT j.*
+                """SELECT j.*,
+                          p.oldest_published_timestamp,
+                          p.newest_published_timestamp
                    FROM fb_scrape_jobs j
+                   LEFT JOIN (
+                       SELECT job_id,
+                              MIN(published_timestamp) AS oldest_published_timestamp,
+                              MAX(published_timestamp) AS newest_published_timestamp
+                       FROM fb_posts
+                       GROUP BY job_id
+                   ) p ON p.job_id = j.job_id
                    ORDER BY j.created_at DESC
                    LIMIT %s OFFSET %s""",
                 (limit, offset),
