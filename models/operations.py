@@ -34,6 +34,18 @@ def invalidate_cache(*keys):
         for k in keys:
             _cache.pop(k, None)
 
+
+def invalidate_jobs_cache():
+    """Drop every cached /api/jobs response so the next dashboard poll
+    re-queries the DB. Call this from anywhere that mutates a job row
+    (pause/stop/continue/rerun/delete/etc.) so the UI reflects the
+    change immediately instead of waiting up to 60s for the cache to
+    expire."""
+    with _cache_lock:
+        for k in [key for key in _cache if key.startswith("all_jobs:")]:
+            _cache.pop(k, None)
+        _cache.pop("global_stats", None)
+
 RUNNING_STATUSES = {"scraping", "downloading_content"}
 IDLE_STATUSES = {"pending", "paused", "stopped", "completed", "failed"}
 
@@ -414,6 +426,8 @@ def _delete_job_now(job_id: str) -> bool:
 
     if deleted and s3_keys:
         delete_s3_objects(s3_keys)
+    if deleted:
+        invalidate_jobs_cache()
     return deleted
 
 
@@ -436,6 +450,10 @@ def _update_job_fields(job_id: str, assignments: dict):
         conn.commit()
     finally:
         conn.close()
+    # Any job-field mutation (e.g. control_action for pause/stop/delete on
+    # a running job) should make the dashboard reflect the change on next
+    # poll instead of waiting for the cache to expire.
+    invalidate_jobs_cache()
 
 
 def _can_apply_download_control_immediately(job: dict) -> bool:
@@ -725,7 +743,7 @@ def start_downloads(job_id: str):
     finally:
         conn.close()
 
-    invalidate_cache("global_stats")
+    invalidate_jobs_cache()
     return get_job(job_id)
 
 
@@ -791,6 +809,7 @@ def retry_failed_downloads(job_id: str):
     finally:
         conn.close()
 
+    invalidate_jobs_cache()
     return get_job(job_id)
 
 
@@ -873,6 +892,7 @@ def rerun_job(job_id: str):
             raise
         finally:
             conn.close()
+        invalidate_jobs_cache()
         return get_job(job_id)
 
     conn = get_connection()
@@ -915,6 +935,7 @@ def rerun_job(job_id: str):
 
     if s3_keys:
         delete_s3_objects(s3_keys)
+    invalidate_jobs_cache()
     return get_job(job_id)
 
 
@@ -1484,6 +1505,10 @@ def update_job_status(
         conn.commit()
     finally:
         conn.close()
+    # Every status transition (pause/stop/continue/complete/fail) must drop
+    # the dashboard cache so the next poll reflects the new state instead of
+    # waiting up to 60s for the cache to expire.
+    invalidate_jobs_cache()
 
 
 def update_job_progress(
